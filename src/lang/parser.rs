@@ -113,3 +113,6 @@ pub fn build_tree(tokens: Vec<Token>) -> Result<Node, Vec<ParseError>> {
 
     Ok(root)
 }
+
+#[cfg(test)]
+mod tests;
