@@ -7,3 +7,5 @@ description = "XDP-based Network Filter"
 license = "MIT"
 
 [dependencies]
+clap = "3.0.0-beta.2"
+colored = "2.0.0"
