@@ -27,6 +27,22 @@ impl Node {
     }
 }
 
+impl fmt::Display for Node {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn fmt_inner(node: &Node, f: &mut fmt::Formatter<'_>, level: usize) -> fmt::Result {
+            writeln!(f, "{}{}", "  ".repeat(level), node.token)?;
+
+            for child in node.childs.iter() {
+                fmt_inner(&child, f, level + 1)?;
+            }
+
+            Ok(())
+        }
+
+        fmt_inner(&self, f, 0)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
     UnexpectedBlockOpen(Token),

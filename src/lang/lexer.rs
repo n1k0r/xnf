@@ -32,12 +32,29 @@ impl Token {
     }
 }
 
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{},{}", self.kind, self.line, self.column)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenKind {
     RulePart { id: String },
     EOL,
     BlockOpen,
     BlockClose,
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", match self {
+            TokenKind::RulePart { id } => format!("\"{}\"", id),
+            TokenKind::EOL => "EOL".to_string(),
+            TokenKind::BlockOpen => "BlockOpen".to_string(),
+            TokenKind::BlockClose => "BlockClose".to_string(),
+        })
+    }
 }
 
 pub fn extract_tokens(src: &str) -> Vec<Token> {
