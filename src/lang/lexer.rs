@@ -98,3 +98,6 @@ pub fn extract_tokens(src: &str) -> Vec<Token> {
 
     tokens
 }
+
+#[cfg(test)]
+mod tests;
