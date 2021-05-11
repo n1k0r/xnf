@@ -391,8 +391,16 @@ fn guess_token(token: &str, last: bool) -> Option<TokenKind> {
     }
 }
 
-pub fn extract_tokens(src: &str) -> Vec<Token> {
+#[derive(Debug)]
+pub struct LexicalError {
+    token: String,
+    line: usize,
+    column: usize,
+}
+
+pub fn extract_tokens(src: &str) -> (Vec<Token>, Vec<LexicalError>) {
     let mut tokens: Vec<Token> = vec![];
+    let mut errors = vec![];
 
     for (line, line_str) in src.lines().enumerate() {
         let mut current_token_start: Option<usize> = None;
@@ -401,19 +409,23 @@ pub fn extract_tokens(src: &str) -> Vec<Token> {
         for (column, char) in line_str.chars().enumerate() {
             let last_column = column == chars_count - 1;
 
-            let mut finish_token = |from, to| -> bool {
+            let mut finish_token = |from, to| {
                 let token = &line_str[from..to];
                 let kind = guess_token(token, true);
                 if kind.is_none() {
-                    return false;
+                    errors.push(LexicalError {
+                        token: token.to_string(),
+                        line,
+                        column,
+                    });
+
+                    return;
                 }
 
                 let kind = kind.unwrap();
                 tokens.push(
                     Token { kind, line: line + 1, column: from + 1 }
                 );
-
-                true
             };
 
             if char.is_whitespace() || char == '#' {
@@ -465,7 +477,7 @@ pub fn extract_tokens(src: &str) -> Vec<Token> {
         );
     }
 
-    tokens
+    (tokens, errors)
 }
 
 #[cfg(test)]
