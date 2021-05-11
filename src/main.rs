@@ -69,14 +69,18 @@ fn main() {
                 },
             };
 
-            let tokens = xnf::lang::lexer::extract_tokens(&src);
             println!("{}", "Tokens:".bold().underline());
-            tokens.iter().for_each(|token| println!("{}", token));
+            let tokens = xnf::lang::lexer::extract_tokens(&src);
+            tokens.iter().for_each(|token| println!("{:?}", token));
 
             println!("");
 
-            let root = xnf::lang::parser::build_tree(tokens).unwrap();
-            print!("{}\n{}", "Tree:".bold().underline(), root);
+            println!("{}", "Filter:".bold().underline());
+            let filter = xnf::lang::parser::parse(tokens.iter());
+            match filter {
+                Ok(filter) => println!("{:#?}", filter),
+                Err(err) => println!("Errors: {:#?}", err),
+            }
         },
         _ => println!("{:#?}", args), // TODO: implement other commands
     }
