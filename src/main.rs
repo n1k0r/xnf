@@ -64,22 +64,33 @@ fn main() {
             let src = match std::fs::read_to_string(check.filter) {
                 Ok(str) => str,
                 Err(err) => {
-                    eprintln!("{} {}", "Error:".red().bold(), err);
+                    eprintln!("{} {}", "Error:".bold().red(), err);
                     return;
                 },
             };
 
-            println!("{}", "Tokens:".bold().underline());
-            let tokens = xnf::lang::lexer::extract_tokens(&src);
+            let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
+            if errors.len() > 0 {
+                eprintln!("{}", "Lexical errors:".bold().red());
+                errors.iter().for_each(|error| eprintln!("{:?}", error));
+                return;
+            }
+
+            println!("{}", "Lexical analysis done".bold().green());
             tokens.iter().for_each(|token| println!("{:?}", token));
 
             println!("");
 
-            println!("{}", "Filter:".bold().underline());
             let filter = xnf::lang::parser::parse(tokens.iter());
             match filter {
-                Ok(filter) => println!("{:#?}", filter),
-                Err(err) => println!("Errors: {:#?}", err),
+                Ok(filter) => {
+                    println!("{}", "Parsing done".bold().green());
+                    println!("{:#?}", filter);
+                },
+                Err(errors) => {
+                    eprintln!("{}", "Parsing errors:".bold().red());
+                    errors.iter().for_each(|error| eprintln!("{:?}", error));
+                }
             }
         },
         _ => println!("{:#?}", args), // TODO: implement other commands
