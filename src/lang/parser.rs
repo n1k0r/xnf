@@ -1,25 +1,40 @@
-use super::lexer::{Action, Const, Kw, SKw, SizeUnit, TKind, Token, Type, EOL};
+use super::lexer::{Action, CmpOp, Const, Kw, SKw, SizeUnit, TKind, Token, Type, EOL};
+
+use std::collections::HashMap;
+
+const ROOT_PROTO: &str = "ethertype";
 
 #[derive(Debug)]
 pub struct Filter {
     protocols: Vec<Protocol>,
     connections: Vec<Connection>,
-    rules: Node,
+    rules: Vec<Rule>,
 }
 
-impl Filter {
-    fn new() -> Filter {
-        Filter {
-            protocols: vec![],
-            connections: vec![],
-            rules: Node::root(),
-        }
-    }
+#[derive(Debug)]
+pub struct Rule {
+    action: Action,
+    iface: Option<String>,
+    tests: Vec<ProtoTest>,
+}
+
+#[derive(Debug)]
+pub struct ProtoTest {
+    protocol: String,
+    tests: Vec<FieldTest>,
+}
+
+#[derive(Debug)]
+pub struct FieldTest {
+    field: String,
+    op: CmpOp,
+    constant: Const,
 }
 
 #[derive(Debug)]
 struct Protocol {
     name: String,
+    token: Token,
     fields: Vec<Field>,
     size: usize, // excluding var_gap
     var_gap: Option<FinalVarGap>,
@@ -32,9 +47,10 @@ struct FinalVarGap {
 }
 
 impl Protocol {
-    fn new(name: String) -> Protocol {
+    fn new(name: String, token: Token) -> Protocol {
         Protocol {
             name,
+            token,
             fields: vec![],
             size: 0,
             var_gap: None,
@@ -49,6 +65,8 @@ struct Field {
     offset_bits: usize,
     size_bits: usize,
     is_protocol: bool,
+
+    token_name: Token,
 }
 
 #[derive(Debug)]
@@ -56,6 +74,10 @@ struct Connection {
     container: String,
     encapsulated: String,
     ids: Vec<Const>,
+
+    token_container: Token,
+    token_encapsulated: Token,
+    tokens_ids: Vec<Token>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,7 +116,6 @@ impl Node {
 pub enum RulePart {
     Action(Token),
     Identifier(Token),
-    Const(Token),
     Cmp { field: Token, op: Token, constant: Token },
 }
 
@@ -103,6 +124,19 @@ pub enum ParseError {
     UnexpectedToken { found: Token, expected: Vec<TKind> },
     UnexpectedEnd,
     ProtoSize { end: Token, size: usize },
+    ReservedName { token: Token, name: String },
+    ProtoNameDuplicate { token: Token, name: String },
+    FieldNameDuplicate { token: Token, name: String, proto: String, used_in: String },
+    UnknownRulePartId { token: Token, id: String },
+    FieldUsedTwice { token: Token, name: String },
+    UnknownProtocol { token: Token, name: String },
+    ConnectionSameProtocol { token: Token, name: String },
+    ConnectionWrongIdCount { token: Token, required: usize, given: usize },
+    UnusedProtocol { token: Token, name: String },
+    ConnectionsCycle { container: String, encapsulated: String },
+    NoRootProto { token: Token },
+    NoProtoPath { token: Token },
+    UnknownField { token: Token, name: String },
 }
 
 fn unexp_token(found: &Token, expected: TKind) -> ParseError {
@@ -119,8 +153,475 @@ fn unexp_token_plural(found: &Token, expected: Vec<TKind>) -> ParseError {
     }
 }
 
-pub fn parse<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<Filter, Vec<ParseError>> {
-    let mut filter = Filter::new();
+pub fn build_filter<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<Filter, Vec<ParseError>> {
+    let (protocols, connections, rules_root, mut errors) = parse_structs(tokens);
+
+    let mut filter = Filter {
+        protocols,
+        connections,
+        rules: vec![],
+    };
+
+    let mut proto_errors = check_proto(&filter.protocols, &filter.connections);
+    errors.append(&mut proto_errors);
+
+    if errors.len() > 0 {
+        return Err(errors);
+    }
+
+    let flat_rules = flatten_node(vec![&rules_root]);
+    let (rules, mut rules_errors) = process_rules(&flat_rules, &filter.protocols, &filter.connections);
+    errors.append(&mut rules_errors);
+    filter.rules = rules;
+
+    // TODO: check cmp type
+
+    if errors.len() > 0 {
+        return Err(errors);
+    }
+
+    Ok(filter)
+}
+
+fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> (Vec<Rule>, Vec<ParseError>) {
+    let mut rules = vec![];
+    let mut errors = vec![];
+
+    'rules: for rule_parts in parts.iter() {
+        let mut action = None;
+        let mut iface = None;
+
+        let mut protos = vec![];
+
+        for part in rule_parts.iter() {
+            match part {
+                RulePart::Action(token) => {
+                    if action.is_none() {
+                        if let TKind::Keyword(Kw::Action(new_action)) = token.get_kind() {
+                            action = Some(new_action);
+                        }
+                    }
+                },
+                RulePart::Identifier(token) => {
+                    if let TKind::Identifier(id) = token.get_kind() {
+                        let proto = protocols.iter().find(|p| p.name == *id);
+                        match proto {
+                            Some(proto) => protos.push(proto.name.clone()),
+                            None => {
+                                if iface.is_none() {
+                                    iface = Some(id.clone());
+                                    continue;
+                                }
+
+                                errors.push(
+                                    ParseError::UnknownRulePartId {
+                                        token: token.clone(),
+                                        id: id.clone(),
+                                    }
+                                );
+                            },
+                        }
+                    }
+                },
+                RulePart::Cmp {..} => {},
+            }
+        }
+
+        let root_proto = protos.iter().find(|p| {
+            connections.iter().find(|c| c.encapsulated == **p && c.container == ROOT_PROTO).is_some()
+        });
+
+        let last_token = match rule_parts.last().unwrap() {
+            RulePart::Action(token) => token,
+            RulePart::Identifier(token) => token,
+            RulePart::Cmp { constant, .. } => constant,
+        };
+
+        if root_proto.is_none() {
+            if action.is_some() && rule_parts.len() == 1 {
+                rules.push(
+                    Rule {
+                        action: action.unwrap().clone(),
+                        iface,
+                        tests: vec![],
+                    }
+                );
+
+                continue;
+            }
+
+            errors.push(
+                ParseError::NoRootProto {
+                    token: last_token.clone(),
+                },
+            );
+            continue;
+        }
+
+        let root_proto = root_proto.unwrap().clone();
+
+        protos.retain(|p| *p != root_proto);
+
+        let mut proto_order = vec![root_proto];
+        while !protos.is_empty() {
+            let last = proto_order.last().unwrap();
+            let con = connections.iter().find(
+                |c| c.container == **last && protos.contains(&c.encapsulated)
+            );
+
+            match con {
+                Some(con) => {
+                    proto_order.push(con.encapsulated.clone());
+                    protos.retain(|p| *p != con.encapsulated);
+                },
+                None => {
+                    errors.push(
+                        ParseError::NoProtoPath {
+                            token: last_token.clone(),
+                        },
+                    );
+
+                    continue 'rules;
+                },
+            }
+        }
+
+        drop(protos);
+
+        let mut tests: Vec<_> = proto_order.iter().map(|p| ProtoTest {
+            protocol: p.clone(),
+            tests: vec![],
+        }).collect();
+
+        for part in rule_parts.iter() {
+            if let RulePart::Cmp { field, op, constant } = part {
+                let field = if let TKind::Identifier(id) = field.get_kind() { id } else { unreachable!() };
+                let op = if let TKind::Keyword(Kw::CmpOp(op)) = op.get_kind() { op } else { unreachable!() };
+                let constant = if let TKind::Constant(constant) = constant.get_kind() { constant } else { unreachable!() };
+
+                let proto = proto_order.iter().map(
+                    |p| protocols.iter().find(|pp| pp.name == *p).unwrap()
+                ).find(|p| p.fields.iter().find(|f| f.name == *field).is_some());
+
+                if proto.is_none() {
+                    errors.push(
+                        ParseError::UnknownField {
+                            token: last_token.clone(),
+                            name: field.clone(),
+                        },
+                    );
+
+                    continue 'rules;
+                }
+
+                let proto = proto.unwrap();
+                let ptests = tests.iter_mut().find(|p| p.protocol == proto.name).unwrap();
+                ptests.tests.push(
+                    FieldTest {
+                        field: field.clone(),
+                        op: op.clone(),
+                        constant: constant.clone(),
+                    }
+                );
+            }
+        }
+
+        rules.push(
+            Rule {
+                action: action.unwrap().clone(),
+                iface,
+                tests,
+            }
+        );
+    }
+
+    (rules, errors)
+}
+
+fn check_proto(protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    errors.extend(
+        check_proto_names(protocols)
+    );
+
+    errors.extend(
+        check_proto_connections(protocols, connections)
+    );
+
+    errors.extend(
+        check_proto_connected(protocols, connections)
+    );
+
+    errors.extend(
+        check_proto_acyclic(protocols, connections)
+    );
+
+    if errors.len() > 0 {
+        return errors;
+    }
+
+    errors.extend(
+        check_proto_traverse(protocols, connections)
+    );
+
+    errors
+}
+
+fn check_proto_names(protocols: &Vec<Protocol>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    for proto in protocols.iter() {
+        let count = protocols.iter().filter(|p| p.name == proto.name).count();
+
+        if count > 1 {
+            let error = ParseError::ProtoNameDuplicate {
+                name: proto.name.clone(),
+                token: proto.token.clone(),
+            };
+
+            if !errors.contains(&error) {
+                errors.push(error);
+            }
+        }
+
+        if proto.name == ROOT_PROTO {
+            errors.push(
+                ParseError::ReservedName {
+                    name: proto.name.clone(),
+                    token: proto.token.clone(),
+                }
+            );
+        }
+    }
+
+    errors
+}
+
+fn check_proto_connections(protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    for connection in connections.iter() {
+        let encapsulated = protocols.iter().find(|p| p.name == connection.encapsulated);
+        if encapsulated.is_none() || connection.encapsulated == ROOT_PROTO {
+            errors.push(
+                ParseError::UnknownProtocol {
+                    name: connection.encapsulated.clone(),
+                    token: connection.token_encapsulated.clone(),
+                }
+            );
+
+            continue;
+        }
+
+        let container = protocols.iter().find(|p| p.name == connection.container);
+        if container.is_none() && connection.container != ROOT_PROTO {
+            errors.push(
+                ParseError::UnknownProtocol {
+                    name: connection.container.clone(),
+                    token: connection.token_container.clone(),
+                }
+            );
+
+            continue;
+        }
+
+        if connection.encapsulated == connection.container {
+            errors.push(
+                ParseError::ConnectionSameProtocol {
+                    name: connection.encapsulated.clone(),
+                    token: connection.token_encapsulated.clone(),
+                }
+            );
+
+            continue;
+        }
+
+        if connection.container != ROOT_PROTO {
+            let container = container.unwrap();
+            let container_id_count = container.fields.iter().filter(|f| f.is_protocol).count();
+            let id_count = connection.ids.len();
+            if id_count != container_id_count {
+                errors.push(
+                    ParseError::ConnectionWrongIdCount {
+                        token: connection.token_container.clone(),
+                        required: container_id_count,
+                        given: id_count,
+                    }
+                )
+            }
+        }
+
+        // TODO: check id type
+    }
+
+    errors
+}
+
+fn get_encapsulated<'a>(proto: &str, connections: &'a Vec<Connection>) -> Vec<&'a str> {
+    connections.iter().filter_map(
+        |c| if c.container == proto { Some(&c.encapsulated[..]) } else { None }
+    ).collect::<Vec<_>>()
+}
+
+fn check_proto_connected(protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    fn visit<'a>(proto: &'a str, connections: &'a Vec<Connection>, visited: &mut Vec<&'a str>) {
+        if visited.contains(&proto) {
+            return;
+        }
+
+        visited.push(proto);
+
+        let childs = get_encapsulated(proto, connections);
+        for child in childs {
+            visit(child, connections, visited);
+        }
+    }
+
+    let mut visited: Vec<&str> = vec![];
+    visit(ROOT_PROTO, connections, &mut visited);
+
+    for proto in protocols.iter() {
+        if !visited.contains(&&proto.name[..]) {
+            errors.push(
+                ParseError::UnusedProtocol {
+                    name: proto.name.clone(),
+                    token: proto.token.clone(),
+                }
+            );
+        }
+    }
+
+    errors
+}
+
+fn check_proto_acyclic(protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    enum Mark {
+        Current,
+        Visited,
+    }
+
+    fn visit<'a>(proto: &'a str, connections: &'a Vec<Connection>, marks: &mut HashMap<&'a str, Mark>) -> Option<ParseError> {
+        marks.insert(proto, Mark::Current);
+
+        let childs = get_encapsulated(proto, connections);
+        for child in childs {
+            match marks.get(child) {
+                None => {
+                    match visit(child, connections, marks) {
+                        error @ Some(_) => return error,
+                        None => (),
+                    }
+                },
+                Some(Mark::Current) => return Some(
+                    ParseError::ConnectionsCycle {
+                        container: child.to_string(),
+                        encapsulated: proto.to_string(),
+                    }
+                ),
+                _ => (),
+            }
+        }
+
+        marks.insert(proto, Mark::Visited);
+        None
+    }
+
+    let mut marks = HashMap::new();
+    let mut error = visit(ROOT_PROTO, connections, &mut marks);
+    for proto in protocols.iter() {
+        if error.is_some() {
+            break;
+        }
+
+        error = visit(&proto.name, connections, &mut marks);
+    }
+
+    if error.is_some() {
+        errors.push(error.unwrap());
+    }
+
+    errors
+}
+
+fn check_proto_traverse(protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> Vec<ParseError> {
+    let mut errors = vec![];
+
+    fn visit<'a>(proto: &'a str, protocols: &'a Vec<Protocol>, connections: &'a Vec<Connection>, names: &HashMap<&'a str, &'a str>, errors: &mut Vec<ParseError>) {
+        let childs = get_encapsulated(proto, connections);
+        for child in childs {
+            let mut names = names.clone();
+
+            let protocol = protocols.iter().find(|p| p.name == child);
+            if let Some(protocol) = protocol {
+                names.insert(child, child);
+
+                for field in protocol.fields.iter() {
+                    let name = &field.name[..];
+                    if names.contains_key(name) {
+                        errors.push(
+                            ParseError::FieldNameDuplicate {
+                                token: field.token_name.clone(),
+                                name: field.name.to_string(),
+                                proto: child.to_string(),
+                                used_in: names[name].to_string(),
+                            }
+                        );
+
+                        continue;
+                    }
+
+                    names.insert(name, child);
+                }
+            }
+
+            visit(child, protocols, connections, &names, errors);
+        }
+    }
+
+    let names = HashMap::new();
+    visit(ROOT_PROTO, protocols, connections, &names, &mut errors);
+
+    errors
+}
+
+fn flatten_node(stack: Vec<&Node>) -> Vec<Vec<RulePart>> {
+    let last = stack.last().unwrap();
+    let childs = last.get_childs();
+    let leaf = childs.len() == 0;
+
+    if leaf {
+        let rule = stack.iter().skip(1)
+            .map(
+                |node| node.get_part().clone()
+            )
+            .collect();
+
+        return vec![rule];
+    }
+
+    let mut rules = vec![];
+
+    for child in childs {
+        let mut child_stack = stack.clone();
+        child_stack.push(child);
+
+        let mut new_rules = flatten_node(child_stack);
+
+        rules.append(&mut new_rules);
+    }
+
+    rules
+}
+
+fn parse_structs<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> (Vec<Protocol>, Vec<Connection>, Node, Vec<ParseError>) {
+    let mut protocols = vec![];
+    let mut connections = vec![];
+    let mut root = Node::root();
     let mut errors = vec![];
 
     while let Some(token) = tokens.next() {
@@ -130,7 +631,7 @@ pub fn parse<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<
             TKind::Keyword(
                 Kw::Structural(SKw::Proto)
             ) => match parse_proto(&mut tokens) {
-                Ok(proto) => filter.protocols.push(proto),
+                Ok(proto) => protocols.push(proto),
                 Err(mut proto_errors) => errors.append(&mut proto_errors),
             },
 
@@ -140,15 +641,15 @@ pub fn parse<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<
                 ) == Some(TKind::Keyword(
                     Kw::Structural(SKw::TypeBlockOpen))
                 )
-            => match parse_connection(id.clone(), &mut tokens) {
-                Ok(connection) => { filter.connections.push(connection); },
+            => match parse_connection(id.clone(), &token, &mut tokens) {
+                Ok(connection) => { connections.push(connection); },
                 Err(connection_error) => errors.push(connection_error),
             },
 
             TKind::Keyword(Kw::Action(_))
             | TKind::Constant(_)
             | TKind::Identifier(_) => match parse_rules_block(token, &mut tokens) {
-                Ok(branch) => { filter.rules.append(branch); },
+                Ok(branch) => { root.append(branch); },
                 Err(mut rules_errors) => errors.append(&mut rules_errors),
             },
 
@@ -165,11 +666,7 @@ pub fn parse<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<
         }
     }
 
-    if errors.len() > 0 {
-        return Err(errors);
-    }
-
-    Ok(filter)
+    (protocols, connections, root, errors)
 }
 
 struct ParseProtoContext {
@@ -203,9 +700,11 @@ fn parse_proto<'a>(tokens: &mut impl Iterator<Item=&'a Token>) -> Result<Protoco
         );
 
     let name;
+    let name_token;
     if let Some(token) = tokens.next() {
         if let TKind::Identifier(id) = token.get_kind() {
             name = id.to_string();
+            name_token = token.clone();
         } else {
             errors.push(
                 unexp_token(token, TKind::any_id())
@@ -219,7 +718,7 @@ fn parse_proto<'a>(tokens: &mut impl Iterator<Item=&'a Token>) -> Result<Protoco
         return Err(errors);
     }
 
-    let mut proto = Protocol::new(name);
+    let mut proto = Protocol::new(name, name_token);
 
     if let Some(token) = tokens.next() {
         if *token.get_kind() != TKind::Keyword(
@@ -257,7 +756,7 @@ fn parse_proto<'a>(tokens: &mut impl Iterator<Item=&'a Token>) -> Result<Protoco
 
             Some(
                 TKind::Identifier(id)
-            ) if proto.var_gap.is_none() => match parse_proto_field(id.to_string(), &mut ctx, tokens) {
+            ) if proto.var_gap.is_none() => match parse_proto_field(id.to_string(), token.unwrap(), &mut ctx, tokens) {
                 Ok(field) => proto.fields.push(field),
                 Err(field_error) => errors.push(field_error),
             },
@@ -372,6 +871,7 @@ fn parse_proto_gap<'a>(
 
 fn parse_proto_field<'a>(
     name: String,
+    token_name: &Token,
     ctx: &mut ParseProtoContext,
     tokens: &mut impl Iterator<Item=&'a Token>
 ) -> Result<Field, ParseError> {
@@ -477,6 +977,8 @@ fn parse_proto_field<'a>(
         offset_bits: ctx.offset_bits,
         size_bits: size,
         is_protocol: protofield,
+
+        token_name: token_name.clone(),
     };
 
     ctx.offset_bits += size;
@@ -522,14 +1024,11 @@ fn parse_size<'a>(tokens: &mut impl Iterator<Item=&'a Token>) -> Result<usize, P
     Ok(size)
 }
 
-fn parse_connection<'a>(container: String, tokens: &mut impl Iterator<Item=&'a Token>) -> Result<Connection, ParseError> {
-    let mut connection = Connection {
-        container,
-        encapsulated: String::new(),
-        ids: vec![],
-    };
-
+fn parse_connection<'a>(container: String, token_container: &Token, tokens: &mut impl Iterator<Item=&'a Token>) -> Result<Connection, ParseError> {
+    let token_encapsulated;
     if let Some(token) = tokens.next() {
+        token_encapsulated = token;
+
         if *token.get_kind() != TKind::Keyword(
             Kw::Structural(SKw::TypeBlockOpen)
         ) {
@@ -544,6 +1043,16 @@ fn parse_connection<'a>(container: String, tokens: &mut impl Iterator<Item=&'a T
         return Err(ParseError::UnexpectedEnd);
     }
 
+    let mut connection = Connection {
+        container,
+        encapsulated: String::new(),
+        ids: vec![],
+
+        token_container: token_container.clone(),
+        token_encapsulated: token_encapsulated.clone(),
+        tokens_ids: vec![],
+    };
+
     loop {
         let token = tokens.next();
         let kind = token.and_then(|t| Some(t.get_kind()));
@@ -556,6 +1065,7 @@ fn parse_connection<'a>(container: String, tokens: &mut impl Iterator<Item=&'a T
 
             Some(TKind::Constant(constant)) => {
                 connection.ids.push(constant.clone());
+                connection.tokens_ids.push(token.unwrap().clone());
             },
 
             Some(_) => {
@@ -603,6 +1113,22 @@ fn parse_connection<'a>(container: String, tokens: &mut impl Iterator<Item=&'a T
     }
 
     Ok(connection)
+}
+
+fn const_to_cmp(token: &Token, constant: &Const) -> RulePart {
+    let const_token = token.clone();
+    let (line, col) = const_token.get_pos();
+
+    let field_id = match constant {
+        Const::Number(..) => "to",
+        Const::Addr4(..) | Const::Addr6(..) => "src",
+        Const::Any => panic!("Const::Any can't be converted to RulePart::Cmp"),
+    }.to_string();
+
+    let field = Token::new(TKind::Identifier(field_id), line, col);
+    let op = Token::new(TKind::Keyword(Kw::CmpOp(CmpOp::Equal)), line, col);
+
+    RulePart::Cmp { field, op, constant: const_token }
 }
 
 fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Token> + Clone)) -> Result<Node, Vec<ParseError>> {
@@ -679,9 +1205,9 @@ fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Tok
                 };
             },
 
-            Some(TKind::Constant(_)) => {
+            Some(TKind::Constant(constant)) => {
                 add_part = Some(
-                    RulePart::Const(token.unwrap().clone())
+                    const_to_cmp(token.unwrap(), constant)
                 );
             },
 

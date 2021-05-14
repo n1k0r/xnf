@@ -33,6 +33,10 @@ impl Token {
     pub fn get_kind(&self) -> &TokenKind {
         &self.kind
     }
+
+    pub fn get_pos(&self) -> (usize, usize) {
+        (self.line, self.column)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
