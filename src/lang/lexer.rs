@@ -397,9 +397,9 @@ fn guess_token(token: &str, last: bool) -> Option<TokenKind> {
 
 #[derive(Debug)]
 pub struct LexicalError {
-    token: String,
-    line: usize,
-    column: usize,
+    pub token: String,
+    pub line: usize,
+    pub column: usize,
 }
 
 pub fn extract_tokens(src: &str) -> (Vec<Token>, Vec<LexicalError>) {
@@ -419,8 +419,8 @@ pub fn extract_tokens(src: &str) -> (Vec<Token>, Vec<LexicalError>) {
                 if kind.is_none() {
                     errors.push(LexicalError {
                         token: token.to_string(),
-                        line,
-                        column,
+                        line: line + 1,
+                        column: from + 1,
                     });
 
                     return;
