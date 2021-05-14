@@ -14,6 +14,10 @@ use colored::*;
 struct Arguments {
     #[clap(subcommand)]
     command: Command,
+
+    /// Print intermediate data structures
+    #[clap[short, long]]
+    debug: bool,
 }
 
 #[derive(Clap, Debug)]
@@ -75,6 +79,12 @@ fn main() {
             eprint.set_src(&src);
 
             let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
+            if args.debug {
+                println!("{}", "Tokens:".bold());
+                tokens.iter().for_each(|t| println!("{:?}", t));
+                println!();
+            }
+
             for error in errors.iter() {
                 eprint.lexical_error(error);
             }
@@ -90,6 +100,11 @@ fn main() {
 
             if errors.len() > 0 {
                 std::process::exit(1);
+            }
+
+            if args.debug {
+                println!("{}", "Filter:".bold());
+                println!("{:#?}\n", filter);
             }
 
             println!("{}", "Filter is valid".bold().green());
