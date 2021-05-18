@@ -1,4 +1,4 @@
-use super::lexer::{Action, CmpOp, Const, Kw, SKw, SizeUnit, TKind, Token, Type, EOL};
+use super::lexer::{Action, CmpOp, Const, Kw, SKw, SizeUnit, TKind, Token, Type, EOL, extract_tokens};
 
 use std::collections::HashMap;
 
@@ -165,6 +165,14 @@ fn unexp_token_plural(found: &Token, expected: Vec<TKind>) -> ParseError {
 }
 
 pub fn build_filter<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<Filter, Vec<ParseError>> {
+    let std_proto = include_str!("std.conf");
+    let mut all_tokens = extract_tokens(std_proto).0;
+    all_tokens.extend(tokens.map(|t| t.clone()));
+
+    process_tokens(all_tokens.iter())
+}
+
+fn process_tokens<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<Filter, Vec<ParseError>> {
     let (protocols, connections, rules_root, mut errors) = parse_structs(tokens);
 
     let mut filter = Filter {
