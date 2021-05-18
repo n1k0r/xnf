@@ -11,39 +11,50 @@ pub struct Filter {
     rules: Vec<Rule>,
 }
 
+impl Filter {
+    pub fn protocols(&self) -> &[Protocol] {
+        &self.protocols
+    }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
+}
+
 #[derive(Debug)]
 pub struct Rule {
-    action: Action,
-    iface: Option<String>,
-    tests: Vec<ProtoTest>,
+    pub action: Action,
+    pub iface: Option<String>,
+    pub ethertype: Option<Const>,
+    pub tests: Vec<ProtoTest>,
 }
 
 #[derive(Debug)]
 pub struct ProtoTest {
-    protocol: String,
-    tests: Vec<FieldTest>,
+    pub protocol: String,
+    pub tests: Vec<FieldTest>,
 }
 
 #[derive(Debug)]
 pub struct FieldTest {
-    field: String,
-    op: CmpOp,
-    constant: Const,
+    pub field: String,
+    pub op: CmpOp,
+    pub constant: Const,
 }
 
 #[derive(Debug)]
-struct Protocol {
-    name: String,
+pub struct Protocol {
+    pub name: String,
     token: Token,
-    fields: Vec<Field>,
-    size: usize, // excluding var_gap
+    pub fields: Vec<Field>,
+    pub size: usize, // excluding var_gap
     var_gap: Option<FinalVarGap>,
 }
 
 #[derive(Debug)]
 struct FinalVarGap {
-    field: String,
-    multiplier: usize,
+    pub field: String,
+    pub multiplier: usize,
 }
 
 impl Protocol {
@@ -59,11 +70,11 @@ impl Protocol {
 }
 
 #[derive(Debug)]
-struct Field {
-    name: String,
-    kind: Type,
-    offset_bits: usize,
-    size_bits: usize,
+pub struct Field {
+    pub name: String,
+    pub kind: Type,
+    pub offset_bits: usize,
+    pub size_bits: usize,
     is_protocol: bool,
 
     token_name: Token,
@@ -188,6 +199,10 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
     let mut errors = vec![];
 
     'rules: for rule_parts in parts.iter() {
+        if rule_parts.len() == 0 {
+            continue;
+        }
+
         let mut action = None;
         let mut iface = None;
 
@@ -243,6 +258,7 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                     Rule {
                         action: action.unwrap().clone(),
                         iface,
+                        ethertype: None,
                         tests: vec![],
                     }
                 );
@@ -262,6 +278,9 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
 
         protos.retain(|p| *p != root_proto);
 
+        let root_con = connections.iter().find(|c| c.encapsulated == root_proto && c.container == ROOT_PROTO).unwrap();
+        let mut cons_order = vec![root_con];
+
         let mut proto_order = vec![root_proto];
         while !protos.is_empty() {
             let last = proto_order.last().unwrap();
@@ -272,6 +291,7 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
             match con {
                 Some(con) => {
                     proto_order.push(con.encapsulated.clone());
+                    cons_order.push(con);
                     protos.retain(|p| *p != con.encapsulated);
                 },
                 None => {
@@ -292,6 +312,36 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
             protocol: p.clone(),
             tests: vec![],
         }).collect();
+
+        let mut ethertype = None;
+        for (num, con) in cons_order.iter().enumerate() {
+            if num == 0 {
+                ethertype = Some(con.ids[num].clone());
+                continue;
+            }
+
+            let prototest = &mut tests[num - 1];
+            let proto = protocols.iter().find(
+                |p| p.name == prototest.protocol
+            ).unwrap();
+
+            let mut pos = 0;
+            for field in proto.fields.iter() {
+                if !field.is_protocol {
+                    continue;
+                }
+
+                prototest.tests.push(
+                    FieldTest {
+                        field: field.name.clone(),
+                        op: CmpOp::Equal,
+                        constant: con.ids[pos].clone(),
+                    }
+                );
+
+                pos += 1;
+            }
+        }
 
         for part in rule_parts.iter() {
             if let RulePart::Cmp { field, op, constant } = part {
@@ -330,6 +380,7 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
             Rule {
                 action: action.unwrap().clone(),
                 iface,
+                ethertype,
                 tests,
             }
         );

@@ -106,7 +106,7 @@ pub enum CmpOp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constant {
     Any,
-    Number(i32),
+    Number(u64),
     Addr4(Ipv4Addr, usize),
     Addr6(Ipv6Addr, usize),
 }
@@ -120,13 +120,13 @@ impl Constant {
             if s.len() == 0 {
                 0
             } else {
-                match i32::from_str_radix(s, 16) {
+                match u64::from_str_radix(s, 16) {
                     Ok(num) => num,
                     Err(_) => return None,
                 }
             }
         } else {
-            match i32::from_str_radix(s, 10) {
+            match u64::from_str_radix(s, 10) {
                 Ok(num) => num,
                 Err(_) => return None,
             }
