@@ -3,6 +3,7 @@ use nix::{self, sys::socket::SockAddr};
 
 use std::path::Path;
 
+#[derive(Debug)]
 pub enum LoadError {
     IfaceNotExist(String),
     Open(String),

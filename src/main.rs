@@ -1,4 +1,12 @@
-use xnf::lang::{lexer::{Const, Kw, LexicalError, SKw, TKind}, parser::ParseError};
+use xnf::{
+    compiler::CompileError,
+    filter::LoadError,
+    lang::{
+        lexer::{Const, Kw, LexicalError, SKw, TKind},
+        parser::ParseError,
+        Filter,
+    },
+};
 
 use clap::{AppSettings, Clap};
 use colored::*;
@@ -67,67 +75,99 @@ fn main() {
 
     let args = Arguments::parse();
     match args.command {
-        Command::Check(check) => {
-            let src = match std::fs::read_to_string(check.filter) {
-                Ok(str) => str,
-                Err(err) => {
-                    eprint.error(&err.to_string());
+        Command::Load(load) => {
+            let result = parse_filter(&mut eprint, &load.filter, args.debug);
+
+            let obj = match xnf::compiler::compile(&result.unwrap()) {
+                Ok(obj) => obj,
+                Err(error) => {
+                    eprint.compile_error(&error);
                     std::process::exit(1);
                 },
             };
 
-            eprint.set_src(&src);
-
-            let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
             if args.debug {
-                println!("{}", "Tokens:".bold());
-                tokens.iter().for_each(|t| println!("{:?}", t));
-                println!();
+                println!("{}\n{}", "IR:".bold(), obj.ir);
             }
 
-            for error in errors.iter() {
-                eprint.lexical_error(error);
+            match xnf::filter::load("lo", &obj.path, args.debug) {
+                Ok(()) => (),
+                Err(error) => {
+                    eprint.load_error(&error);
+                    std::process::exit(1);
+                },
             }
 
-            let filter = xnf::lang::parser::build_filter(tokens.iter());
-            if let Err(errors) = filter {
-                for error in errors {
-                    eprint.parser_error(&error);
-                }
-
-                std::process::exit(1);
+            println!("{}", "Filter loaded".bold().green());
+        },
+        Command::Check(check) => {
+            let result = parse_filter(&mut eprint, &check.filter, args.debug);
+            if let Ok(_) = result {
+                println!("{}", "Filter is valid".bold().green());
             }
-
-            if errors.len() > 0 {
-                std::process::exit(1);
-            }
-
-            if args.debug {
-                println!("{}", "Filter:".bold());
-                println!("{:#?}\n", filter);
-            }
-
-            println!("{}", "Filter is valid".bold().green());
         },
         _ => println!("{:#?}", args), // TODO: implement other commands
     }
 }
 
-struct ErrorPrinter<'a> {
-    first_error: bool,
-    src: Option<&'a str>,
+fn parse_filter(eprint: &mut ErrorPrinter, filter: &str, debug: bool) -> Result<Filter, ()> {
+    let src = match std::fs::read_to_string(filter) {
+        Ok(str) => str,
+        Err(err) => {
+            eprint.error(&err.to_string());
+            std::process::exit(1);
+        },
+    };
+
+    eprint.set_src(&src);
+
+    let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
+    if debug {
+        println!("{}", "Tokens:".bold());
+        tokens.iter().for_each(|t| println!("{:?}", t));
+        println!();
+    }
+
+    for error in errors.iter() {
+        eprint.lexical_error(error);
+    }
+
+    let filter = xnf::lang::parser::build_filter(tokens.iter());
+    if let Err(errors) = filter {
+        for error in errors {
+            eprint.parser_error(&error);
+        }
+
+        std::process::exit(1);
+    }
+
+    if errors.len() > 0 {
+        std::process::exit(1);
+    }
+
+    if debug {
+        println!("{}", "Filter:".bold());
+        println!("{:#?}\n", filter);
+    }
+
+    Ok(filter.unwrap())
 }
 
-impl<'a> ErrorPrinter<'a> {
-    fn new() -> ErrorPrinter<'a> {
+struct ErrorPrinter {
+    first_error: bool,
+    src: Option<String>,
+}
+
+impl ErrorPrinter {
+    fn new() -> ErrorPrinter {
         ErrorPrinter {
             first_error: true,
             src: None,
         }
     }
 
-    fn set_src(&mut self, src: &'a str) {
-        self.src = Some(src);
+    fn set_src(&mut self, src: &str) {
+        self.src = Some(src.to_string());
     }
 
     fn check_line(&mut self) {
@@ -151,7 +191,7 @@ impl<'a> ErrorPrinter<'a> {
     fn error_pos(&mut self, msg: &str, line: usize, column: usize) {
         self.check_line();
 
-        if let Some(src) = self.src {
+        if let Some(src) = &self.src {
             let src_line = src.lines().nth(line - 1);
             if let Some(src_line) = src_line {
                 let line_str = line.to_string();
@@ -240,7 +280,7 @@ impl<'a> ErrorPrinter<'a> {
                 let mut line = 0;
                 let mut column = 0;
 
-                if let Some(src) = self.src {
+                if let Some(src) = &self.src {
                     line = src.lines().count();
                     if let Some(last) = src.lines().last() {
                         column = last.chars().count();
@@ -316,6 +356,24 @@ impl<'a> ErrorPrinter<'a> {
                 let (line, column) = token.get_pos();
                 let msg = format!("field `{}` is not part of any used protocols", name);
                 self.error_pos(&msg, line, column);
+            },
+        }
+    }
+
+    fn compile_error(&mut self, error: &CompileError) {
+        match error {
+            _ => {
+                let msg = format!("{:?}", error);
+                self.error(&msg);
+            },
+        }
+    }
+
+    fn load_error(&mut self, error: &LoadError) {
+        match error {
+            _ => {
+                let msg = format!("{:?}", error);
+                self.error(&msg);
             },
         }
     }
