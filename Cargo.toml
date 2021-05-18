@@ -9,3 +9,6 @@ license = "MIT"
 [dependencies]
 clap = "3.0.0-beta.2"
 colored = "2.0.0"
+inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm11-0"] }
+libbpf-rs = "0.9"
+nix = "0.20.0"
