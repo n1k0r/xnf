@@ -1,3 +1,4 @@
+use bpf::{Link, Object};
 use libbpf_rs as bpf;
 use nix::{self, sys::socket::SockAddr};
 
@@ -11,7 +12,12 @@ pub enum LoadError {
     Attach(String),
 }
 
-pub fn load(iface_name: &str, path: &Path, debug: bool) -> Result<(), LoadError> {
+pub struct LoadedFilter {
+    object: Object,
+    link: Link,
+}
+
+pub fn load(iface_name: &str, path: &Path, debug: bool) -> Result<LoadedFilter, LoadError> {
     let ifindex = match get_ifindex(iface_name) {
         Some(index) => index,
         None => return Err(LoadError::IfaceNotExist(iface_name.to_string())),
@@ -38,14 +44,17 @@ pub fn load(iface_name: &str, path: &Path, debug: bool) -> Result<(), LoadError>
 
     let prog = obj.prog_unwrap("main");
 
-    let _link = match prog.attach_xdp(ifindex as i32) {
+    let link = match prog.attach_xdp(ifindex as i32) {
         Ok(link) => link,
         Err(error) => return Err(
             LoadError::Attach(format!("{}", error))
         ),
     };
 
-    Ok(())
+    Ok(LoadedFilter {
+        object: obj,
+        link: link,
+    })
 }
 
 fn get_ifindex(iface_name: &str) -> Option<usize> {

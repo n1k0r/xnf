@@ -90,15 +90,17 @@ fn main() {
                 println!("{}\n{}", "IR:".bold(), obj.ir);
             }
 
-            match xnf::filter::load("lo", &obj.path, args.debug) {
-                Ok(()) => (),
+            let _object = match xnf::filter::load("lo", &obj.path, args.debug) {
+                Ok(object) => object,
                 Err(error) => {
                     eprint.load_error(&error);
                     std::process::exit(1);
                 },
-            }
+            };
 
             println!("{}", "Filter loaded".bold().green());
+
+            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
         },
         Command::Check(check) => {
             let result = parse_filter(&mut eprint, &check.filter, args.debug);
