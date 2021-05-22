@@ -1,11 +1,7 @@
 use xnf::{
     compiler::CompileError,
     filter::LoadError,
-    lang::{
-        lexer::{Const, Kw, LexicalError, SKw, TKind},
-        parser::ParseError,
-        Filter,
-    },
+    lang::{tokens::*, Filter, LexicalError, ParseError},
 };
 
 use clap::{AppSettings, Clap};

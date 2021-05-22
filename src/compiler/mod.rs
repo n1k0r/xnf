@@ -1,8 +1,4 @@
-use crate::lang::{
-    self,
-    lexer::{CmpOp, Constant, Type},
-    parser::{Field, FieldTest, ProtoTest, Protocol},
-};
+use crate::lang::{self, filter::*, tokens::*};
 
 use inkwell::{
     basic_block::BasicBlock,
@@ -33,7 +29,7 @@ pub enum CompileError {
 }
 
 #[allow(dead_code)]
-enum Action {
+enum ActionCode {
     Drop = 1,
     Pass = 2,
 }
@@ -88,12 +84,12 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context) -> Result<Module<'a
 
     let action_pass = ctx.append_basic_block(fn_main, "pass");
     builder.position_at_end(action_pass);
-    let result = ctx.i32_type().const_int(Action::Pass as u64, false);
+    let result = ctx.i32_type().const_int(ActionCode::Pass as u64, false);
     builder.build_return(Some(&result));
 
     let action_drop = ctx.append_basic_block(fn_main, "drop");
     builder.position_at_end(action_drop);
-    let result = ctx.i32_type().const_int(Action::Drop as u64, false);
+    let result = ctx.i32_type().const_int(ActionCode::Drop as u64, false);
     builder.build_return(Some(&result));
 
     let start = ctx.append_basic_block(fn_main, "start");
@@ -164,8 +160,8 @@ fn build_rule<'a>(env: &'a mut FilterBuildEnv, rule: &lang::Rule, ethertype: &'a
     }
 
     let action = match rule.action {
-        lang::lexer::Action::Pass => env.pass,
-        lang::lexer::Action::Drop => env.drop,
+        Action::Pass => env.pass,
+        Action::Drop => env.drop,
         _ => unreachable!(),
     };
     env.builder.build_unconditional_branch(*action);

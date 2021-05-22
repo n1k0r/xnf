@@ -1,114 +1,164 @@
+use super::tokens::*;
+
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-pub use Constant as Const;
-pub use Keyword as Kw;
-pub use StructuralKeyword as SKw;
-pub use TokenKind as TKind;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Token {
-    kind: TokenKind,
-    line: usize,
-    column: usize,
+#[derive(Debug)]
+pub struct LexicalError {
+    pub token: String,
+    pub line: usize,
+    pub column: usize,
 }
 
-impl Token {
-    #[allow(dead_code)]
-    pub(super) fn new(kind: TokenKind, line: usize, column: usize) -> Token {
-        Token { kind, line, column }
-    }
+pub fn extract_tokens(src: &str) -> (Vec<Token>, Vec<LexicalError>) {
+    let mut tokens: Vec<Token> = vec![];
+    let mut errors = vec![];
 
-    pub fn root() -> Token {
-        Token {
-            kind: TokenKind::Keyword(
-                Keyword::Structural(
-                    StructuralKeyword::EOL
-                )
-            ),
-            line: 0,
-            column: 0,
+    for (line, line_str) in src.lines().enumerate() {
+        let mut current_token_start: Option<usize> = None;
+
+        let chars_count = line_str.chars().collect::<Vec<char>>().len();
+        for (column, char) in line_str.chars().enumerate() {
+            let last_column = column == chars_count - 1;
+
+            let mut finish_token = |from, to| {
+                let token = &line_str[from..to];
+                let kind = guess_token(token, true);
+                if kind.is_none() {
+                    errors.push(LexicalError {
+                        token: token.to_string(),
+                        line: line + 1,
+                        column: from + 1,
+                    });
+
+                    return;
+                }
+
+                let kind = kind.unwrap();
+                tokens.push(
+                    Token::new(kind, line + 1, from + 1),
+                );
+            };
+
+            if char.is_whitespace() || char == '#' {
+                if let Some(start) = current_token_start {
+                    finish_token(start, column);
+                    current_token_start = None;
+                }
+
+                if char == '#' {
+                    break;
+                }
+            } else {
+                if current_token_start == None {
+                    current_token_start = Some(column);
+                } else {
+                    let tried_token = line_str[current_token_start.unwrap()..column + 1].to_string();
+                    let kind = guess_token(&tried_token, false);
+
+                    if kind == None {
+                        finish_token(current_token_start.unwrap(), column);
+                        current_token_start = Some(column);
+                    }
+                }
+            }
+
+            if last_column && current_token_start.is_some() {
+                finish_token(current_token_start.unwrap(), column + 1);
+                current_token_start = None;
+            }
         }
+
+        tokens.push(Token::new(
+            EOL,
+            line + 1,
+            chars_count + 1,
+        ));
     }
 
-    pub fn get_kind(&self) -> &TokenKind {
-        &self.kind
+    let last_token = tokens.last();
+    if last_token == None || *last_token.unwrap().get_kind() != EOL {
+        let (lines, last_line) = src.lines().enumerate().last().unwrap_or((0, ""));
+
+        tokens.push(Token::new(
+            EOL,
+            lines + 1,
+            last_line.to_string().chars().count() + 1,
+        ));
     }
 
-    pub fn get_pos(&self) -> (usize, usize) {
-        (self.line, self.column)
+    (tokens, errors)
+}
+
+fn guess_token(token: &str, last: bool) -> Option<TokenKind> {
+    use StructuralKeyword as SK;
+    let struct_kw = |kw| Some(TokenKind::Keyword(Keyword::Structural(kw)));
+    let action_kw = |action| Some(TokenKind::Keyword(Keyword::Action(action)));
+    let type_kw = |kwtype| Some(TokenKind::Keyword(Keyword::Type(kwtype)));
+    let cmp_op = |op| Some(TokenKind::Keyword(Keyword::CmpOp(op)));
+
+    let is_id = |s: &str|
+        s.len() > 0 &&
+        s.chars().nth(0).unwrap().is_alphabetic() &&
+        s.chars().all(|c| c.is_ascii_alphanumeric());
+
+    match token {
+        "proto" => struct_kw(SK::Proto),
+        "->" => struct_kw(SK::Is),
+        "{" => struct_kw(SK::ProtoBlockOpen),
+        "}" => struct_kw(SK::ProtoBlockClose),
+        ":" => struct_kw(SK::Delimiter),
+        "!" => struct_kw(SK::ProtoField),
+        "(" => struct_kw(SK::TypeBlockOpen),
+        ")" => struct_kw(SK::TypeBlockClose),
+        "*" => struct_kw(SK::Of),
+        "[" => struct_kw(SK::RuleBlockOpen),
+        "]" => struct_kw(SK::RuleBlockClose),
+
+        "=" => cmp_op(CmpOp::Equal),
+        "!=" => cmp_op(CmpOp::NotEqual),
+        ">" => cmp_op(CmpOp::Greater),
+        ">=" => cmp_op(CmpOp::GreaterOrEqual),
+        "<" => cmp_op(CmpOp::Lesser),
+        "<=" => cmp_op(CmpOp::LesserOrEqual),
+
+        "pass" => action_kw(Action::Pass),
+        "drop" => action_kw(Action::Drop),
+
+        "uint" => type_kw(Type::UInt),
+        "addr4" => type_kw(Type::Addr4),
+        "addr6" => type_kw(Type::Addr6),
+
+        "b" => Some(
+            TKind::Keyword(
+                Kw::SizeUnit(SizeUnit::Bit)
+            )
+        ),
+        "B" => Some(
+            TKind::Keyword(
+                Kw::SizeUnit(SizeUnit::Byte)
+            )
+        ),
+
+        s if Const::parse_number(s).is_some() => Some(
+            TKind::Constant(Const::parse_number(s).unwrap())
+        ),
+        s if Const::parse_ip4(s).is_some() => Some(
+            TKind::Constant(Const::parse_ip4(s).unwrap())
+        ),
+        s if Const::parse_ip6(s).0.is_some() && (
+            !last || Const::parse_ip6(s).1
+        ) => Some(
+            TKind::Constant(Const::parse_ip6(s).0.unwrap())
+        ),
+
+        s if is_id(s) => Some(
+            TokenKind::Identifier(
+                s.to_string().to_lowercase()
+            )
+        ),
+
+        _ => None,
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TokenKind {
-    Keyword(Keyword),
-    Constant(Constant),
-    Identifier(String),
-}
-
-impl TokenKind {
-    pub fn any_id() -> TokenKind {
-        TokenKind::Identifier("".to_string())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Keyword {
-    Structural(StructuralKeyword),
-    Type(Type),
-    Action(Action),
-    CmpOp(CmpOp),
-    SizeUnit(SizeUnit),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StructuralKeyword {
-    Proto,
-    Is,
-    ProtoBlockOpen,
-    ProtoBlockClose,
-    Delimiter,
-    ProtoField,
-    TypeBlockOpen,
-    TypeBlockClose,
-    Of,
-    RuleBlockOpen,
-    RuleBlockClose,
-    EOL,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Type {
-    Any,
-    UInt,
-    Addr4,
-    Addr6,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Action {
-    Any,
-    Pass,
-    Drop,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CmpOp {
-    Any,
-    Equal,
-    NotEqual,
-    Greater,
-    GreaterOrEqual,
-    Lesser,
-    LesserOrEqual,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Constant {
-    Any,
-    Number(u64),
-    Addr4(Ipv4Addr, usize),
-    Addr6(Ipv6Addr, usize),
 }
 
 impl Constant {
@@ -298,190 +348,6 @@ impl Constant {
             )
         ), valid)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SizeUnit {
-    Any,
-    Bit,
-    Byte,
-}
-
-impl SizeUnit {
-    pub fn to_bits(&self) -> usize {
-        match self {
-            SizeUnit::Bit => 1,
-            SizeUnit::Byte => 8,
-            SizeUnit::Any => panic!("SizeUnit::Any can't be used"),
-        }
-    }
-}
-
-pub const EOL: TokenKind = TokenKind::Keyword(
-    Keyword::Structural(
-        StructuralKeyword::EOL
-    )
-);
-
-fn guess_token(token: &str, last: bool) -> Option<TokenKind> {
-    use StructuralKeyword as SK;
-    let struct_kw = |kw| Some(TokenKind::Keyword(Keyword::Structural(kw)));
-    let action_kw = |action| Some(TokenKind::Keyword(Keyword::Action(action)));
-    let type_kw = |kwtype| Some(TokenKind::Keyword(Keyword::Type(kwtype)));
-    let cmp_op = |op| Some(TokenKind::Keyword(Keyword::CmpOp(op)));
-
-    let is_id = |s: &str|
-        s.len() > 0 &&
-        s.chars().nth(0).unwrap().is_alphabetic() &&
-        s.chars().all(|c| c.is_ascii_alphanumeric());
-
-    match token {
-        "proto" => struct_kw(SK::Proto),
-        "->" => struct_kw(SK::Is),
-        "{" => struct_kw(SK::ProtoBlockOpen),
-        "}" => struct_kw(SK::ProtoBlockClose),
-        ":" => struct_kw(SK::Delimiter),
-        "!" => struct_kw(SK::ProtoField),
-        "(" => struct_kw(SK::TypeBlockOpen),
-        ")" => struct_kw(SK::TypeBlockClose),
-        "*" => struct_kw(SK::Of),
-        "[" => struct_kw(SK::RuleBlockOpen),
-        "]" => struct_kw(SK::RuleBlockClose),
-
-        "=" => cmp_op(CmpOp::Equal),
-        "!=" => cmp_op(CmpOp::NotEqual),
-        ">" => cmp_op(CmpOp::Greater),
-        ">=" => cmp_op(CmpOp::GreaterOrEqual),
-        "<" => cmp_op(CmpOp::Lesser),
-        "<=" => cmp_op(CmpOp::LesserOrEqual),
-
-        "pass" => action_kw(Action::Pass),
-        "drop" => action_kw(Action::Drop),
-
-        "uint" => type_kw(Type::UInt),
-        "addr4" => type_kw(Type::Addr4),
-        "addr6" => type_kw(Type::Addr6),
-
-        "b" => Some(
-            TKind::Keyword(
-                Kw::SizeUnit(SizeUnit::Bit)
-            )
-        ),
-        "B" => Some(
-            TKind::Keyword(
-                Kw::SizeUnit(SizeUnit::Byte)
-            )
-        ),
-
-        s if Const::parse_number(s).is_some() => Some(
-            TKind::Constant(Const::parse_number(s).unwrap())
-        ),
-        s if Const::parse_ip4(s).is_some() => Some(
-            TKind::Constant(Const::parse_ip4(s).unwrap())
-        ),
-        s if Const::parse_ip6(s).0.is_some() && (
-            !last || Const::parse_ip6(s).1
-        ) => Some(
-            TKind::Constant(Const::parse_ip6(s).0.unwrap())
-        ),
-
-        s if is_id(s) => Some(
-            TokenKind::Identifier(
-                s.to_string().to_lowercase()
-            )
-        ),
-
-        _ => None,
-    }
-}
-
-#[derive(Debug)]
-pub struct LexicalError {
-    pub token: String,
-    pub line: usize,
-    pub column: usize,
-}
-
-pub fn extract_tokens(src: &str) -> (Vec<Token>, Vec<LexicalError>) {
-    let mut tokens: Vec<Token> = vec![];
-    let mut errors = vec![];
-
-    for (line, line_str) in src.lines().enumerate() {
-        let mut current_token_start: Option<usize> = None;
-
-        let chars_count = line_str.chars().collect::<Vec<char>>().len();
-        for (column, char) in line_str.chars().enumerate() {
-            let last_column = column == chars_count - 1;
-
-            let mut finish_token = |from, to| {
-                let token = &line_str[from..to];
-                let kind = guess_token(token, true);
-                if kind.is_none() {
-                    errors.push(LexicalError {
-                        token: token.to_string(),
-                        line: line + 1,
-                        column: from + 1,
-                    });
-
-                    return;
-                }
-
-                let kind = kind.unwrap();
-                tokens.push(
-                    Token { kind, line: line + 1, column: from + 1 }
-                );
-            };
-
-            if char.is_whitespace() || char == '#' {
-                if let Some(start) = current_token_start {
-                    finish_token(start, column);
-                    current_token_start = None;
-                }
-
-                if char == '#' {
-                    break;
-                }
-            } else {
-                if current_token_start == None {
-                    current_token_start = Some(column);
-                } else {
-                    let tried_token = line_str[current_token_start.unwrap()..column + 1].to_string();
-                    let kind = guess_token(&tried_token, false);
-
-                    if kind == None {
-                        finish_token(current_token_start.unwrap(), column);
-                        current_token_start = Some(column);
-                    }
-                }
-            }
-
-            if last_column && current_token_start.is_some() {
-                finish_token(current_token_start.unwrap(), column + 1);
-                current_token_start = None;
-            }
-        }
-
-        tokens.push(Token {
-            kind: EOL,
-            line: line + 1,
-            column: chars_count + 1,
-        });
-    }
-
-    let last_token = tokens.last();
-    if last_token == None || last_token.unwrap().kind != EOL {
-        let (lines, last_line) = src.lines().enumerate().last().unwrap_or((0, ""));
-
-        tokens.push(
-            Token {
-                kind: EOL,
-                line: lines + 1,
-                column: last_line.to_string().chars().count() + 1,
-            }
-        );
-    }
-
-    (tokens, errors)
 }
 
 #[cfg(test)]
