@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 pub use Constant as Const;
@@ -5,7 +7,7 @@ pub use Keyword as Kw;
 pub use StructuralKeyword as SKw;
 pub use TokenKind as TKind;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Token {
     kind: TokenKind,
     line: usize,
@@ -38,7 +40,7 @@ impl Token {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum TokenKind {
     Keyword(Keyword),
     Constant(Constant),
@@ -51,7 +53,7 @@ impl TokenKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Keyword {
     Structural(StructuralKeyword),
     Type(Type),
@@ -60,7 +62,7 @@ pub enum Keyword {
     SizeUnit(SizeUnit),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum StructuralKeyword {
     Proto,
     Is,
@@ -76,7 +78,7 @@ pub enum StructuralKeyword {
     EOL,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Type {
     Any,
     UInt,
@@ -84,14 +86,14 @@ pub enum Type {
     Addr6,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Action {
     Any,
     Pass,
     Drop,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum CmpOp {
     Any,
     Equal,
@@ -102,7 +104,7 @@ pub enum CmpOp {
     LesserOrEqual,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Constant {
     Any,
     Number(u64),
@@ -110,7 +112,7 @@ pub enum Constant {
     Addr6(Ipv6Addr, usize),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SizeUnit {
     Any,
     Bit,

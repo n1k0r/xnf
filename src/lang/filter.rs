@@ -1,6 +1,8 @@
 use super::tokens::*;
 
-#[derive(Debug)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Filter {
     protocols: Vec<Protocol>,
     connections: Vec<Connection>,
@@ -29,7 +31,7 @@ impl Filter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Rule {
     pub action: Action,
     pub iface: Option<String>,
@@ -37,20 +39,20 @@ pub struct Rule {
     pub tests: Vec<ProtoTest>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ProtoTest {
     pub protocol: String,
     pub tests: Vec<FieldTest>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct FieldTest {
     pub field: String,
     pub op: CmpOp,
     pub constant: Const,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Protocol {
     pub name: String,
     pub token: Token,
@@ -71,13 +73,13 @@ impl Protocol {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct FinalVarGap {
     pub field: String,
     pub multiplier: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Field {
     pub name: String,
     pub kind: Type,
@@ -88,7 +90,7 @@ pub struct Field {
     pub token_name: Token,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Connection {
     pub container: String,
     pub encapsulated: String,

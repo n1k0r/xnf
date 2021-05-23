@@ -9,6 +9,7 @@ use inkwell::{
     values::{FunctionValue, IntValue, PointerValue},
     AddressSpace as AddrSpace, IntPredicate,
 };
+use serde::{Deserialize, Serialize};
 
 use std::path::PathBuf;
 
@@ -17,7 +18,7 @@ pub struct FilterObject {
     pub ir: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum CompileError {
     TargetUnavailable,
     ObjSaveError(String),
