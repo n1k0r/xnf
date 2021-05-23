@@ -349,6 +349,3 @@ impl Constant {
         ), valid)
     }
 }
-
-#[cfg(test)]
-mod tests;

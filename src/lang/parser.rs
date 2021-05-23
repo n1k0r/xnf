@@ -1007,6 +1007,3 @@ fn get_right_subchild(root: &mut Node, level: u32) -> Option<&mut Node> {
         },
     }
 }
-
-#[cfg(test)]
-mod tests;
