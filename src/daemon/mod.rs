@@ -2,14 +2,16 @@ pub use crate::ipc::ListenerError;
 
 use crate::{
     compiler::compile,
-    ipc::{self, Request, Response, ServerConnection, Listener},
-    lang::Filter,
+    filter::{Loader, storage::FilterID},
+    ipc::{self, Listener, Request, Response, ServerConnection},
+    lang::Filter
 };
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::{Arc, Mutex}};
 
 pub struct Daemon {
     listener: Listener,
+    loader: Arc<Mutex<Loader>>,
 }
 
 pub enum DaemonError {
@@ -25,25 +27,27 @@ impl Daemon {
             Err(err) => return Err(DaemonError::OpenListener(err)),
         };
 
-        Ok(Daemon { listener })
+        let loader = Arc::new(Mutex::new(Loader::new()));
+
+        Ok(Daemon { listener, loader })
     }
 
     pub fn listen(&mut self) {
         while let Some(connection) = self.listener.next() {
-            std::thread::spawn(|| handler(connection));
+            let loader = self.loader.clone();
+            std::thread::spawn(|| handler(connection, loader));
         }
     }
 }
 
-fn handler(mut connection: ServerConnection) {
+fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
     while let Some(req) = connection.next() {
-        match req {
-            Request::Compile(filter) => {
-                let result = handler_compile(filter);
-                connection.send(&result).unwrap();
-            },
-            _ => (),
-        }
+        let response = match req {
+            Request::Compile(filter) => handler_compile(filter),
+            Request::Load(id) => handler_load(id, loader.clone()),
+        };
+
+        connection.send(&response).unwrap();
     }
 }
 
@@ -56,4 +60,10 @@ fn handler_compile(filter: Filter) -> Response {
     };
 
     Response::CompileResult(Ok(obj))
+}
+
+fn handler_load(id: FilterID, loader: Arc<Mutex<Loader>>) -> Response {
+    let mut loader = loader.lock().unwrap();
+    let result = loader.load(id);
+    Response::LoadResult(result)
 }

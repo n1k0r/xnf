@@ -1,5 +1,5 @@
 use super::unix;
-use crate::{compiler::CompileError, lang::Filter};
+use crate::{compiler::CompileError, filter::{LoadError, storage::FilterID}, lang::Filter};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +13,11 @@ pub type Connection = unix::Connection<Request, Response>;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Request {
     Compile(Filter),
-    Apply(u64),
+    Load(FilterID),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
-    CompileResult(Result<u64, CompileError>),
-    ApplyResult(Result<(), ApplyError>),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum ApplyError {
-    ObjectNotFound,
-    VerifierRejected,
+    CompileResult(Result<FilterID, CompileError>),
+    LoadResult(Result<(), LoadError>),
 }
