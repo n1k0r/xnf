@@ -1,3 +1,4 @@
+use crate::filter::storage::{self, FilterStorage};
 use crate::lang::{self, filter::*, tokens::*};
 
 use inkwell::{
@@ -11,15 +12,11 @@ use inkwell::{
 };
 use serde::{Deserialize, Serialize};
 
-use std::path::PathBuf;
-
-pub struct FilterObject {
-    pub path: PathBuf,
-    pub ir: String,
-}
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CompileError {
+    CreateStorage(String),
     TargetUnavailable,
     ObjSaveError(String),
     TypeNotImplemented(Type),
@@ -38,14 +35,44 @@ enum ActionCode {
 const ETH_LEN: u64 = 14;
 const ETHERTYPE_OFFSET: u64 = 12;
 
-pub fn compile(filter: &lang::Filter) -> Result<FilterObject, CompileError> {
-    let ctx = Context::create();
-    let module = build_module(filter, &ctx)?;
+pub fn compile(filter: &lang::Filter) -> Result<storage::FilterID, CompileError> {
+    let folder = match FilterStorage::new() {
+        Ok(storage) => storage,
+        Err(err) => return Err(
+            CompileError::CreateStorage(err.to_string())
+        ),
+    };
 
-    let path = save_obj(&module)?;
-    let ir = module.print_to_string().to_string();
+    let mut ifaces = vec!["".to_string()];
+    ifaces.extend(
+        get_ifaces(filter.rules())
+    );
 
-    Ok(FilterObject { path, ir })
+    for iface in ifaces.iter() {
+        let ctx = Context::create();
+
+        let opt_iface = if iface.len() > 0 { Some (&iface[..]) } else { None };
+        let module = build_module(filter, &ctx, opt_iface)?;
+
+        let path = folder.save_object(opt_iface).unwrap();
+        save_obj(&module, &path)?;
+    }
+
+    Ok(folder.id())
+}
+
+fn get_ifaces(rules: &[Rule]) -> Vec<String> {
+    let mut ifaces = vec![];
+
+    for rule in rules {
+        if let Some(iface) = &rule.iface {
+            if !ifaces.contains(iface) {
+                ifaces.push(iface.clone());
+            }
+        }
+    }
+
+    ifaces
 }
 
 #[allow(dead_code)]
@@ -64,7 +91,7 @@ struct FilterBuildEnv<'a, 'f> {
     offset: u64,
 }
 
-fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context) -> Result<Module<'a>, CompileError> {
+fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>) -> Result<Module<'a>, CompileError> {
     let module = ctx.create_module("");
 
     let fn_main_type = ctx.i32_type().fn_type(
@@ -132,7 +159,16 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context) -> Result<Module<'a
     builder.build_unconditional_branch(rules);
     builder.position_at_end(rules);
 
+    let iface = match iface {
+        Some(iface) => Some(iface.to_string()),
+        None => None,
+    };
+
     for rule in filter.rules() {
+        if !rule.iface.is_none() && iface != rule.iface {
+            continue;
+        }
+
         build_rule(&mut env, rule, &ethertype)?;
     }
 
@@ -410,7 +446,7 @@ fn build_mem_check<'a>(env: &'a FilterBuildEnv, offset: u64, then_block: BasicBl
     ptr
 }
 
-fn save_obj(module: &Module) -> Result<PathBuf, CompileError> {
+fn save_obj(module: &Module, path: &Path) -> Result<(), CompileError> {
     let config = InitConfig {
         asm_parser: true,
         asm_printer: true,
@@ -435,9 +471,6 @@ fn save_obj(module: &Module) -> Result<PathBuf, CompileError> {
         None => return Err(CompileError::TargetUnavailable),
     };
 
-    let mut path = std::env::temp_dir();
-    path.push("filter.o"); // TODO: generate name
-
     if let Err(error) = machine_target.write_to_file(
         &module,
         inkwell::targets::FileType::Object,
@@ -446,5 +479,5 @@ fn save_obj(module: &Module) -> Result<PathBuf, CompileError> {
         return Err(CompileError::ObjSaveError(error.to_string()));
     }
 
-    Ok(path)
+    Ok(())
 }
