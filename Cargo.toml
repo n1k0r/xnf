@@ -7,8 +7,10 @@ description = "XDP-based Network Filter"
 license = "MIT"
 
 [dependencies]
+bincode = "1.3.3"
 clap = "3.0.0-beta.2"
 colored = "2.0.0"
 inkwell = { git = "https://github.com/TheDan64/inkwell", branch = "master", features = ["llvm11-0"] }
 libbpf-rs = "0.9"
 nix = "0.20.0"
+serde = { version = "1.0.126", features = ["derive"] }
