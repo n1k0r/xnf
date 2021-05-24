@@ -378,4 +378,13 @@ impl ErrorPrinter {
             },
         }
     }
+
+    fn client_error(&mut self, error: &ClientError) {
+        match error {
+            _ => {
+                let msg = format!("{:?}", error);
+                self.error(&msg);
+            },
+        }
+    }
 }
