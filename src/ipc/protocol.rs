@@ -3,9 +3,8 @@ use crate::{compiler::CompileError, lang::Filter};
 
 use serde::{Deserialize, Serialize};
 
-use std::path::PathBuf;
-
 pub const SOCKET_PATH: &str = "/run/xnf.sock";
+pub const PID_PATH: &str = "/run/xnf.pid";
 
 pub type Listener = unix::Listener<Response, Request>;
 pub type ServerConnection = unix::Connection<Response, Request>;
@@ -27,16 +26,4 @@ pub enum Response {
 pub enum ApplyError {
     ObjectNotFound,
     VerifierRejected,
-}
-
-pub fn create_listener() -> Option<Listener> {
-    let path = PathBuf::from(SOCKET_PATH);
-    let listener = Listener::new(&path);
-    listener
-}
-
-pub fn create_connection() -> Option<Connection> {
-    let path = PathBuf::from(SOCKET_PATH);
-    let connection = Connection::new(&path);
-    connection
 }

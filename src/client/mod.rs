@@ -1,21 +1,25 @@
-use crate::lang::Filter;
 use crate::{
     compiler::CompileError,
-    ipc::{create_connection, ApplyError, Connection, Request, Response},
+    ipc::{self, ApplyError, Connection, Request, Response},
+    lang::Filter,
 };
+
+use std::io::Error as IOError;
+use std::path::PathBuf;
 
 pub struct Client {
     connection: Connection,
 }
 
 impl Client {
-    pub fn new() -> Option<Self> {
-        let connection = match create_connection() {
-            Some(c) => c,
-            None => return None,
+    pub fn new() -> Result<Self, ClientError> {
+        let path = PathBuf::from(ipc::SOCKET_PATH);
+        let connection = match Connection::new(&path) {
+            Ok(c) => c,
+            Err(err) => return Err(ClientError::OpenListener(path, err)),
         };
 
-        Some(Self { connection })
+        Ok(Self { connection })
     }
 
     pub fn compile_filter(&mut self, filter: Filter) -> Result<u64, ClientError> {
@@ -60,6 +64,7 @@ impl Client {
 
 #[derive(Debug)]
 pub enum ClientError {
+    OpenListener(PathBuf, IOError),
     ConnectionClosed,
     UnexpectedResponse,
     ApplyError(ApplyError),

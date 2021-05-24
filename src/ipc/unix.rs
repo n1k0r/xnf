@@ -1,30 +1,76 @@
+use nix::unistd::Pid;
 use serde::{de::DeserializeOwned, Serialize};
 
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::{
     io::{prelude::*, Error as IOError},
     marker::PhantomData,
-    path::Path,
+    os::unix::net::{UnixListener, UnixStream},
+    path::{Path, PathBuf},
 };
 
 pub struct Listener<Send, Recv> {
     listener: UnixListener,
+    sock_path: PathBuf,
+    pid_path: PathBuf,
     send: PhantomData<Send>,
     recv: PhantomData<Recv>,
 }
 
+pub enum ListenerError {
+    CreateSockError(PathBuf, IOError),
+    RemoveSockError(PathBuf, IOError),
+    ReadPIDError(PathBuf, IOError),
+    WritePIDError(PathBuf, IOError),
+    ChannelBusy,
+}
+
 impl<Send, Recv> Listener<Send, Recv> {
-    pub fn new(path: &Path) -> Option<Self> {
-        let listener = match UnixListener::bind(path) {
+    pub fn new(sock_path: &Path, pid_path: &Path) -> Result<Self, ListenerError> {
+        if pid_path.is_file() {
+            let pid_str = match std::fs::read_to_string(pid_path) {
+                Ok(s) => s,
+                Err(err) => return Err(ListenerError::ReadPIDError(pid_path.to_path_buf(), err)),
+            };
+
+            if let Ok(pid) = pid_str.parse::<i32>() {
+                let npid = Pid::from_raw(pid);
+                if let Ok(()) = nix::sys::signal::kill(npid, None) {
+                    return Err(ListenerError::ChannelBusy);
+                }
+            }
+        }
+
+        let pid = std::process::id();
+        let pid_str = format!("{}", pid);
+        if let Err(err) = std::fs::write(pid_path, pid_str) {
+            return Err(ListenerError::WritePIDError(pid_path.to_path_buf(), err));
+        }
+
+        if sock_path.exists() {
+            if let Err(err) = std::fs::remove_file(sock_path) {
+                return Err(ListenerError::RemoveSockError(sock_path.to_path_buf(), err));
+            }
+        }
+
+        let listener = match UnixListener::bind(sock_path) {
             Ok(listener) => listener,
-            Err(_) => return None,
+            Err(err) => return Err(ListenerError::CreateSockError(sock_path.to_path_buf(), err)),
         };
 
-        Some(Self {
+        Ok(Self {
             listener,
+            sock_path: sock_path.to_path_buf(),
+            pid_path: pid_path.to_path_buf(),
             send: PhantomData,
             recv: PhantomData,
         })
+    }
+}
+
+impl<Send, Recv> Drop for Listener<Send, Recv> {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.sock_path).unwrap();
+        std::fs::remove_file(&self.pid_path).unwrap();
     }
 }
 
@@ -50,14 +96,11 @@ pub struct Connection<Send, Recv> {
 
 impl<Send, Recv> Connection<Send, Recv>
 where Send: Serialize {
-    pub fn new(path: &Path) -> Option<Self> {
-        let stream = match UnixStream::connect(path) {
-            Ok(stream) => stream,
-            Err(_) => return None,
-        };
+    pub fn new(path: &Path) -> Result<Self, IOError> {
+        let stream = UnixStream::connect(path)?;
 
         let connection = Self::from(stream);
-        Some(connection)
+        Ok(connection)
     }
 
     pub fn send(&mut self, msg: &Send) -> Result<(), IOError> {

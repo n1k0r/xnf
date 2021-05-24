@@ -79,8 +79,8 @@ fn main() {
             };
 
             let mut client = match Client::new() {
-                Some(client) => client,
-                None => {
+                Ok(client) => client,
+                Err(_) => {
                     eprintln!("{}", "Unable to connect to daemon".bold().red());
                     std::process::exit(1);
                 },
