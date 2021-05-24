@@ -1,4 +1,5 @@
 use xnf::{
+    client::{Client, ClientError},
     compiler::CompileError,
     filter::LoadError,
     lang::{tokens::*, Filter, LexicalError, ParseError},
@@ -72,31 +73,33 @@ fn main() {
     let args = Arguments::parse();
     match args.command {
         Command::Load(load) => {
-            let result = parse_filter(&mut eprint, &load.filter, args.debug);
+            let filter = match parse_filter(&mut eprint, &load.filter, args.debug) {
+                Ok(filter) => filter,
+                Err(()) => std::process::exit(1),
+            };
 
-            let obj = match xnf::compiler::compile(&result.unwrap()) {
-                Ok(obj) => obj,
-                Err(error) => {
-                    eprint.compile_error(&error);
+            let mut client = match Client::new() {
+                Some(client) => client,
+                None => {
+                    eprintln!("{}", "Unable to connect to daemon".bold().red());
                     std::process::exit(1);
                 },
             };
 
-            if args.debug {
-                println!("{}\n{}", "IR:".bold(), obj.ir);
+            let filter_id = match client.compile_filter(filter) {
+                Ok(id) => id,
+                Err(err) => {
+                    eprint.client_error(&err);
+                    std::process::exit(1);
+                },
+            };
+
+            if let Err(err) = client.apply_filter(filter_id) {
+                eprint.client_error(&err);
+                std::process::exit(1);
             }
 
-            let _object = match xnf::filter::load("lo", &obj.path, args.debug) {
-                Ok(object) => object,
-                Err(error) => {
-                    eprint.load_error(&error);
-                    std::process::exit(1);
-                },
-            };
-
-            println!("{}", "Filter loaded".bold().green());
-
-            std::thread::sleep(std::time::Duration::from_secs(u64::MAX));
+            println!("{}", "Filter applied to network interfaces".bold().green());
         },
         Command::Check(check) => {
             let result = parse_filter(&mut eprint, &check.filter, args.debug);
