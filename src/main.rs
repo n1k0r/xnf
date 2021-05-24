@@ -94,7 +94,7 @@ fn main() {
                 },
             };
 
-            if let Err(err) = client.apply_filter(filter_id) {
+            if let Err(err) = client.load_filter(filter_id) {
                 eprint.client_error(&err);
                 std::process::exit(1);
             }
@@ -381,6 +381,8 @@ impl ErrorPrinter {
 
     fn client_error(&mut self, error: &ClientError) {
         match error {
+            ClientError::CompilerError(err) => self.compile_error(err),
+            ClientError::LoadError(err) => self.load_error(err),
             _ => {
                 let msg = format!("{:?}", error);
                 self.error(&msg);

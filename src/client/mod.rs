@@ -1,7 +1,8 @@
 use crate::{
     compiler::CompileError,
-    ipc::{self, ApplyError, Connection, Request, Response},
-    lang::Filter,
+    filter::LoadError,
+    ipc::{self, Connection, Request, Response},
+    lang::Filter
 };
 
 use std::io::Error as IOError;
@@ -35,13 +36,13 @@ impl Client {
         }
     }
 
-    pub fn apply_filter(&mut self, id: u64) -> Result<(), ClientError> {
-        let req = Request::Apply(id);
+    pub fn load_filter(&mut self, id: u64) -> Result<(), ClientError> {
+        let req = Request::Load(id);
         self.send(&req)?;
 
         match self.recv()? {
-            Response::ApplyResult(Ok(())) => Ok(()),
-            Response::ApplyResult(Err(err)) => Err(ClientError::ApplyError(err)),
+            Response::LoadResult(Ok(())) => Ok(()),
+            Response::LoadResult(Err(err)) => Err(ClientError::LoadError(err)),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
@@ -67,6 +68,6 @@ pub enum ClientError {
     OpenListener(PathBuf, IOError),
     ConnectionClosed,
     UnexpectedResponse,
-    ApplyError(ApplyError),
+    LoadError(LoadError),
     CompilerError(CompileError),
 }
