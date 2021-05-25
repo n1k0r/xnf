@@ -1,0 +1,10 @@
+[Unit]
+Description=XDP-based Network Filter
+Wants=network-pre.target
+Before=network-pre.target
+
+[Service]
+ExecStart=/usr/bin/xnfd
+
+[Install]
+WantedBy=multi-user.target

@@ -24,3 +24,13 @@ libbpf-rs = "0.9"
 nix = "0.20.0"
 rand = "0.8.3"
 serde = { version = "1.0.126", features = ["derive"] }
+
+[package.metadata.deb]
+section = "net"
+assets = [
+  ["target/release/xnf", "usr/bin/", "755"],
+  ["target/release/xnfd", "usr/bin/", "755"],
+  ["examples/*", "usr/share/doc/xnf/examples/", "644"],
+]
+maintainer-scripts = "scripts"
+systemd-units = {}
