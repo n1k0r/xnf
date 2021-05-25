@@ -8,6 +8,10 @@ license = "MIT"
 autoexamples = false
 
 [[bin]]
+name = "xnf"
+path = "src/bin/cli.rs"
+
+[[bin]]
 name = "xnfd"
 path = "src/bin/daemon.rs"
 

@@ -27,16 +27,9 @@ struct Arguments {
 
 #[derive(Clap, Debug)]
 enum Command {
-    Show(Show),
     Load(Load),
     Check(Check),
-    Verify(Verify),
-    Stats(Stats),
 }
-
-/// Lists network interfaces and status of attached filters
-#[derive(Clap, Debug)]
-struct Show {}
 
 /// Loads specified filter
 #[derive(Clap, Debug)]
@@ -51,21 +44,6 @@ struct Check {
     /// Path to filter description file
     filter: String,
 }
-
-/// Checks if packets of specified type would be rejected
-#[derive(Clap, Debug)]
-struct Verify {
-    /// Path to filter description file
-    #[clap[short, long]]
-    filter: String,
-
-    /// Type of packets for test
-    rule: Vec<String>,
-}
-
-/// Retrieves statistics for loaded filters
-#[derive(Clap, Debug)]
-struct Stats {}
 
 fn main() {
     let mut eprint = ErrorPrinter::new();
@@ -107,7 +85,6 @@ fn main() {
                 println!("{}", "Filter is valid".bold().green());
             }
         },
-        _ => println!("{:#?}", args), // TODO: implement other commands
     }
 }
 
