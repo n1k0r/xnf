@@ -23,7 +23,7 @@ impl FilterStorage {
             }
         }
 
-        let path = filter_path(id);
+        let path = filter_path(&id);
         std::fs::create_dir_all(path)?;
 
         let storage = Self::load(id).unwrap();
@@ -31,7 +31,7 @@ impl FilterStorage {
     }
 
     pub fn load(id: FilterID) -> Option<Self> {
-        let path = filter_path(id);
+        let path = filter_path(&id);
         if !path.is_dir() {
             return None;
         }
@@ -98,7 +98,7 @@ impl FilterStorage {
     }
 
     pub fn mark_current(&self) -> Result<(), IOError> {
-        let filter_path = filter_path(self.id);
+        let filter_path = filter_path(&self.id);
         let current_link = PathBuf::from(CURRENT_PATH);
         if current_link.exists() {
             std::fs::remove_file(&current_link)?;
@@ -110,7 +110,7 @@ impl FilterStorage {
     }
 
     fn build_object_path(&self, iface: Option<&str>) -> PathBuf {
-        let mut path = filter_path(self.id);
+        let mut path = filter_path(&self.id);
 
         if let Some(iface) = iface {
             let name = format!("iface_{}.o", iface);
@@ -123,10 +123,14 @@ impl FilterStorage {
     }
 }
 
-fn filter_path(id: FilterID) -> PathBuf {
+pub fn filter_name(id: &FilterID) -> String {
+    format!("{:016x}", id)
+}
+
+fn filter_path(id: &FilterID) -> PathBuf {
     let mut path = PathBuf::from(STORAGE_PATH);
 
-    let hex = format!("{:016x}", id);
+    let hex = filter_name(id);
     path.push(hex);
 
     path

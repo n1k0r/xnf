@@ -1,7 +1,7 @@
 use xnf::{
     client::{Client, ClientError},
     compiler::CompileError,
-    filter::LoadError,
+    filter::{storage::filter_name, LoadError},
     lang::{tokens::*, Filter, LexicalError, ParseError},
 };
 
@@ -340,8 +340,21 @@ impl ErrorPrinter {
 
     fn compile_error(&mut self, error: &CompileError) {
         match error {
-            _ => {
-                let msg = format!("{:?}", error);
+            CompileError::CmpOpNotImplemented(op) => println!("operator {:?} is not implemented", op),
+            CompileError::CreateStorage(err) => println!("unable to create storage: {}", err),
+            CompileError::ObjSaveError(err) => println!("unable to save object: {}", err),
+            CompileError::TypeNotImplemented(t) => println!("type {:?} is not implemented", t),
+            CompileError::TargetUnavailable => println!("unable to create LLVM target"),
+            CompileError::FieldOffset { field, proto } => {
+                let msg = format!("wrong offset of field `{}` in protocol `{}`", field, proto);
+                self.error(&msg);
+            },
+            CompileError::FieldSize { field, proto } => {
+                let msg = format!("wrong size of field `{}` in protocol `{}`", field, proto);
+                self.error(&msg);
+            },
+            CompileError::FieldType { field, proto } => {
+                let msg = format!("wrong type of field `{}` in protocol `{}`", field, proto);
                 self.error(&msg);
             },
         }
@@ -349,10 +362,15 @@ impl ErrorPrinter {
 
     fn load_error(&mut self, error: &LoadError) {
         match error {
-            _ => {
-                let msg = format!("{:?}", error);
-                self.error(&msg);
-            },
+            LoadError::StorageNotExist(id) => println!("filter {} does not exist", filter_name(id)),
+            LoadError::InvalidStorage(id) => println!("filter storage {} is invalid", filter_name(id)),
+            LoadError::MarkStorage(id, err) => println!("unable to mark filter {}: {}", filter_name(id), err),
+            LoadError::Open(err) => println!("unable to open object: {}", err),
+            LoadError::Load(err) => println!("unable to load object: {}", err),
+            LoadError::Attach(err) => println!("unable to attach filter to network interface: {}", err),
+            LoadError::IfacesList => println!("unable to get list of network interfaces"),
+            LoadError::IfaceNotExist(iface) => println!("unable to attach filter to nonexistent network interface `{}`", iface),
+            LoadError::InternalError => println!("internal communication error"),
         }
     }
 
@@ -360,10 +378,16 @@ impl ErrorPrinter {
         match error {
             ClientError::CompilerError(err) => self.compile_error(err),
             ClientError::LoadError(err) => self.load_error(err),
-            _ => {
-                let msg = format!("{:?}", error);
+            ClientError::OpenListener(path, err) => {
+                let msg = format!(
+                    "unable to connect to {}: {}",
+                    path.to_str().unwrap(),
+                    err.to_string()
+                );
                 self.error(&msg);
             },
+            ClientError::ConnectionClosed => self.error("connection to daemon closed"),
+            ClientError::UnexpectedResponse => self.error("received unexpected response from daemon"),
         }
     }
 }
