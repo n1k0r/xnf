@@ -23,6 +23,7 @@ pub enum ParseError {
     NoRootProto { token: Token },
     NoProtoPath { token: Token },
     UnknownField { token: Token, name: String },
+    TooManyTokensForTest,
 }
 
 fn unexp_token(found: &Token, expected: TKind) -> ParseError {
@@ -47,6 +48,41 @@ pub fn build_filter<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Resu
     process_tokens(all_tokens.iter())
 }
 
+pub fn parse_test<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone, filter: &Filter) -> Result<RuleTest, Vec<ParseError>> {
+    let mut errors = vec![];
+
+    let first = match tokens.next() {
+        Some(token) => token,
+        None => {
+            errors.push(ParseError::UnexpectedEnd);
+            return Err(errors);
+        },
+    };
+
+    let raw_rules = match parse_rules_block(first, &mut tokens, true) {
+        Ok(rules) => rules,
+        Err(mut err) => {
+            errors.append(&mut err);
+            return Err(errors);
+        }
+    };
+
+    let flat_rules = flatten_node(vec![&raw_rules], true);
+    if flat_rules.len() != 1 || tokens.next() != None {
+        errors.push(ParseError::TooManyTokensForTest);
+        return Err(errors);
+    }
+
+    let (_, test, mut rules_errors) = process_rules(&flat_rules, filter.protocols(), filter.connections(), true);
+    if rules_errors.len() > 0 || test.is_none() {
+        errors.append(&mut rules_errors);
+        return Err(errors);
+    }
+    let test = test.unwrap();
+
+    Ok(test)
+}
+
 fn process_tokens<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result<Filter, Vec<ParseError>> {
     let (protocols, connections, rules_root, mut errors) = parse_structs(tokens);
 
@@ -57,8 +93,8 @@ fn process_tokens<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result
         return Err(errors);
     }
 
-    let flat_rules = flatten_node(vec![&rules_root]);
-    let (rules, mut rules_errors) = process_rules(&flat_rules, &protocols, &connections);
+    let flat_rules = flatten_node(vec![&rules_root], false);
+    let (rules, _, mut rules_errors) = process_rules(&flat_rules, &protocols, &connections, false);
     errors.append(&mut rules_errors);
 
     let filter = Filter::new(protocols, connections, rules);
@@ -72,7 +108,7 @@ fn process_tokens<'a>(tokens: impl Iterator<Item = &'a Token> + Clone) -> Result
     Ok(filter)
 }
 
-fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connections: &Vec<Connection>) -> (Vec<Rule>, Vec<ParseError>) {
+fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &[Protocol], connections: &[Connection], test_rule: bool) -> (Vec<Rule>, Option<RuleTest>, Vec<ParseError>) {
     let mut rules = vec![];
     let mut errors = vec![];
 
@@ -89,6 +125,11 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
         for part in rule_parts.iter() {
             match part {
                 RulePart::Action(token) => {
+                    if test_rule {
+                        errors.push(ParseError::TooManyTokensForTest);
+                        return (vec![], None, errors);
+                    }
+
                     if action.is_none() {
                         if let TKind::Keyword(Kw::Action(new_action)) = token.get_kind() {
                             action = Some(new_action);
@@ -101,7 +142,7 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                         match proto {
                             Some(proto) => protos.push(proto.name.clone()),
                             None => {
-                                if iface.is_none() {
+                                if iface.is_none() && !test_rule {
                                     iface = Some(id.clone());
                                     continue;
                                 }
@@ -136,8 +177,7 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                     Rule {
                         action: action.unwrap().clone(),
                         iface,
-                        ethertype: None,
-                        tests: vec![],
+                        test: None,
                     }
                 );
 
@@ -149,6 +189,11 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                     token: last_token.clone(),
                 },
             );
+
+            if test_rule {
+                return (vec![], None, errors);
+            }
+
             continue;
         }
 
@@ -179,6 +224,10 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                         },
                     );
 
+                    if test_rule {
+                        return (vec![], None, errors);
+                    }
+
                     continue 'rules;
                 },
             }
@@ -191,10 +240,10 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
             tests: vec![],
         }).collect();
 
-        let mut ethertype = None;
+        let mut ethertype = Constant::Number(0);
         for (num, con) in cons_order.iter().enumerate() {
             if num == 0 {
-                ethertype = Some(con.ids[num].clone());
+                ethertype = con.ids[num].clone();
                 continue;
             }
 
@@ -239,6 +288,10 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
                         },
                     );
 
+                    if test_rule {
+                        return (vec![], None, errors);
+                    }
+
                     continue 'rules;
                 }
 
@@ -254,26 +307,34 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &Vec<Protocol>, connecti
             }
         }
 
+        let test = Some(RuleTest {
+            ethertype,
+            tests,
+        });
+
+        if test_rule {
+            return (vec![], test, errors);
+        }
+
         rules.push(
             Rule {
                 action: action.unwrap().clone(),
                 iface,
-                ethertype,
-                tests,
+                test: test,
             }
         );
     }
 
-    (rules, errors)
+    (rules, None, errors)
 }
 
-fn flatten_node(stack: Vec<&Node>) -> Vec<Vec<RulePart>> {
+fn flatten_node(stack: Vec<&Node>, test_rule: bool) -> Vec<Vec<RulePart>> {
     let last = stack.last().unwrap();
     let childs = last.get_childs();
     let leaf = childs.len() == 0;
 
     if leaf {
-        let rule = stack.iter().skip(1)
+        let rule = stack.iter().skip(if !test_rule { 1 } else { 0 })
             .map(
                 |node| node.get_part().clone()
             )
@@ -288,7 +349,7 @@ fn flatten_node(stack: Vec<&Node>) -> Vec<Vec<RulePart>> {
         let mut child_stack = stack.clone();
         child_stack.push(child);
 
-        let mut new_rules = flatten_node(child_stack);
+        let mut new_rules = flatten_node(child_stack, test_rule);
 
         rules.append(&mut new_rules);
     }
@@ -326,7 +387,7 @@ fn parse_structs<'a>(mut tokens: impl Iterator<Item = &'a Token> + Clone) -> (Ve
 
             TKind::Keyword(Kw::Action(_))
             | TKind::Constant(_)
-            | TKind::Identifier(_) => match parse_rules_block(token, &mut tokens) {
+            | TKind::Identifier(_) => match parse_rules_block(token, &mut tokens, false) {
                 Ok(branch) => { root.append(branch); },
                 Err(mut rules_errors) => errors.append(&mut rules_errors),
             },
@@ -809,7 +870,7 @@ fn const_to_cmp(token: &Token, constant: &Const) -> RulePart {
     RulePart::Cmp { field, op, constant: const_token }
 }
 
-fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Token> + Clone)) -> Result<Node, Vec<ParseError>> {
+fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Token> + Clone), test_rule: bool) -> Result<Node, Vec<ParseError>> {
     let mut errors: Vec<ParseError> = vec![];
 
     let mut root = None;
@@ -817,14 +878,19 @@ fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Tok
     let mut hanging = true;
     let mut stack = vec![0 as u32];
 
-    let expected = vec![
+    let mut expected = vec![
         TKind::any_id(),
-        TKind::Keyword(Kw::Action(Action::Any)),
         TKind::Constant(Const::Any),
-        TKind::Keyword(Kw::Structural(SKw::RuleBlockOpen)),
-        TKind::Keyword(Kw::Structural(SKw::RuleBlockClose)),
         EOL,
     ];
+
+    if !test_rule {
+        expected.extend_from_slice(&[
+            TKind::Keyword(Kw::Action(Action::Any)),
+            TKind::Keyword(Kw::Structural(SKw::RuleBlockOpen)),
+            TKind::Keyword(Kw::Structural(SKw::RuleBlockClose)),
+        ]);
+    }
 
     let mut first_processed = false;
     loop {
@@ -846,7 +912,7 @@ fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Tok
 
             Some(TKind::Keyword(
                 Kw::Structural(SKw::RuleBlockOpen)
-            )) if root != None => {
+            )) if root != None && !test_rule => {
                 match hanging {
                     true => hanging = false,
                     false => errors.push(
@@ -863,7 +929,7 @@ fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Tok
 
             Some(TKind::Keyword(
                 Kw::Structural(SKw::RuleBlockClose)
-            )) if root != None => {
+            )) if root != None && !test_rule => {
                 match hanging {
                     false => {
                         stack.pop();
@@ -889,7 +955,7 @@ fn parse_rules_block<'a>(first: &Token, tokens: &mut (impl Iterator<Item=&'a Tok
                 );
             },
 
-            Some(TKind::Keyword(Kw::Action(_))) => {
+            Some(TKind::Keyword(Kw::Action(_))) if !test_rule => {
                 add_part = Some(
                     RulePart::Action(token.unwrap().clone())
                 );

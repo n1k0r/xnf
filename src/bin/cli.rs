@@ -2,11 +2,13 @@ use xnf::{
     client::{Client, ClientError},
     compiler::CompileError,
     filter::{storage::filter_name, LoadError},
-    lang::{tokens::*, Filter, LexicalError, ParseError},
+    lang::{tokens::*, Filter, LexicalError, ParseError, RuleTest},
+    verifier,
 };
 
 use clap::{AppSettings, Clap};
 use colored::*;
+use human_panic::setup_panic;
 
 #[derive(Clap, Debug)]
 #[clap(
@@ -29,6 +31,7 @@ struct Arguments {
 enum Command {
     Load(Load),
     Check(Check),
+    Verify(Verify),
 }
 
 /// Loads specified filter
@@ -45,13 +48,26 @@ struct Check {
     filter: String,
 }
 
+/// Checks if packets of specified type would be rejected
+#[derive(Clap, Debug)]
+struct Verify {
+    /// Path to filter description file
+    #[clap[short, long]]
+    filter: String,
+
+    /// Type of packets for test
+    rule: Vec<String>,
+}
+
 fn main() {
+    setup_panic!();
+
     let mut eprint = ErrorPrinter::new();
 
     let args = Arguments::parse();
     match args.command {
         Command::Load(load) => {
-            let filter = match parse_filter(&mut eprint, &load.filter, args.debug) {
+            let filter = match parse_filter_file(&mut eprint, &load.filter, args.debug) {
                 Ok(filter) => filter,
                 Err(()) => std::process::exit(1),
             };
@@ -80,16 +96,37 @@ fn main() {
             println!("{}", "Filter applied to network interfaces".bold().green());
         },
         Command::Check(check) => {
-            let result = parse_filter(&mut eprint, &check.filter, args.debug);
+            let result = parse_filter_file(&mut eprint, &check.filter, args.debug);
             if let Ok(_) = result {
                 println!("{}", "Filter is valid".bold().green());
+            }
+        },
+        Command::Verify(verify) => {
+            let filter = match parse_filter_file(&mut eprint, &verify.filter, args.debug) {
+                Ok(filter) => filter,
+                Err(()) => std::process::exit(1),
+            };
+
+            let test_raw = verify.rule.join(" ");
+            let test = match parse_test(&mut eprint, &test_raw, &filter, args.debug) {
+                Ok(filter) => filter,
+                Err(()) => std::process::exit(1),
+            };
+
+            let matched_rules = verifier::verify(&filter, &test);
+            for rule in matched_rules.iter() {
+                print_rule(rule);
+            }
+
+            if matched_rules.len() == 0 {
+                println!("{}", "No rule matched this test so packet would be passed".bold().blue());
             }
         },
     }
 }
 
-fn parse_filter(eprint: &mut ErrorPrinter, filter: &str, debug: bool) -> Result<Filter, ()> {
-    let src = match std::fs::read_to_string(filter) {
+fn parse_filter_file(eprint: &mut ErrorPrinter, path: &str, debug: bool) -> Result<Filter, ()> {
+    let src = match std::fs::read_to_string(path) {
         Ok(str) => str,
         Err(err) => {
             eprint.error(&err.to_string());
@@ -97,7 +134,11 @@ fn parse_filter(eprint: &mut ErrorPrinter, filter: &str, debug: bool) -> Result<
         },
     };
 
-    eprint.set_src(&src);
+    parse_filter(eprint, &src, debug)
+}
+
+fn parse_filter(eprint: &mut ErrorPrinter, src: &str, debug: bool) -> Result<Filter, ()> {
+    eprint.set_src(src);
 
     let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
     if debug {
@@ -129,6 +170,99 @@ fn parse_filter(eprint: &mut ErrorPrinter, filter: &str, debug: bool) -> Result<
     }
 
     Ok(filter.unwrap())
+}
+
+fn parse_test(eprint: &mut ErrorPrinter, src: &str, filter: &Filter, debug: bool) -> Result<RuleTest, ()> {
+    eprint.set_src(src);
+
+    let (tokens, errors) = xnf::lang::lexer::extract_tokens(&src);
+    if debug {
+        println!("{}", "Tokens:".bold());
+        tokens.iter().for_each(|t| println!("{:?}", t));
+        println!();
+    }
+
+    if errors.len() > 0 {
+        for error in errors.iter() {
+            eprint.lexical_error(error);
+        }
+
+        std::process::exit(1);
+    }
+
+    let test = match xnf::lang::parser::parse_test(tokens.iter(), filter) {
+        Ok(test) => test,
+        Err(errors) => {
+            for error in errors {
+                eprint.parser_error(&error);
+            }
+
+            std::process::exit(1);
+        },
+    };
+
+    if debug {
+        println!("{}", "Test:".bold());
+        println!("{:#?}\n", test);
+    }
+
+    Ok(test)
+}
+
+fn print_rule(vrule: &verifier::VerifiedRule) {
+    let rule = vrule.rule;
+    let mut line = vec![];
+
+    if let Some(iface) = &rule.iface {
+        line.push(iface.blue());
+        line.push(" ".to_string().normal());
+    }
+
+    line.push(match rule.action {
+        Action::Pass => "pass".green(),
+        Action::Drop => "drop".red(),
+        Action::Any => unreachable!(),
+    });
+
+    if let Some(test) = &rule.test {
+        for proto in test.tests.iter() {
+            line.push(" ".to_string().normal());
+            line.push(proto.protocol.underline());
+
+            for field in proto.tests.iter() {
+                let op = match field.op {
+                    CmpOp::Equal => "=",
+                    CmpOp::NotEqual => "!=",
+                    CmpOp::Greater => ">",
+                    CmpOp::GreaterOrEqual => ">=",
+                    CmpOp::Lesser => "<",
+                    CmpOp::LesserOrEqual => "<=",
+                    CmpOp::Any => unreachable!(),
+                };
+
+                let constant = match field.constant {
+                    Const::Number(num) => format!("{}", num),
+                    Const::Addr4(addr, prefix) => format!("{}/{}", addr, prefix),
+                    Const::Addr6(addr, prefix) => format!("{}/{}", addr, prefix),
+                    Const::Any => unreachable!(),
+                };
+
+                line.push(" ".to_string().normal());
+                line.push(field.field.normal());
+                line.push(op.normal());
+                line.push(constant.normal());
+            }
+        }
+    }
+
+    line.iter().for_each(
+        |part| print!("{}", if vrule.last {
+            part.clone().bold()
+        } else {
+            part.clone()
+        })
+    );
+    println!();
 }
 
 struct ErrorPrinter {
@@ -335,6 +469,9 @@ impl ErrorPrinter {
                 let msg = format!("field `{}` is not part of any used protocols", name);
                 self.error_pos(&msg, line, column);
             },
+            ParseError::TooManyTokensForTest => {
+                self.error("test must be single rule without specified action or interface");
+            }
         }
     }
 

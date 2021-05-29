@@ -180,7 +180,7 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>
 fn build_rule<'a>(env: &'a mut FilterBuildEnv, rule: &lang::Rule, ethertype: &'a IntValue<'a>) -> Result<(), CompileError> {
     let fail = env.ctx.append_basic_block(*env.fn_main, "rule_fail");
 
-    if let Some(Constant::Number(value)) = rule.ethertype {
+    if let Some(RuleTest { ethertype: Constant::Number(value), tests: _ }) = rule.test {
         let value = (value as u16).to_be() as u64;
         let rule_ethertype = env.ctx.i32_type().const_int(value, false);
         let cmp_proto = env.builder.build_int_compare(inkwell::IntPredicate::EQ, *ethertype, rule_ethertype, "cmp_ethertype");
@@ -192,8 +192,10 @@ fn build_rule<'a>(env: &'a mut FilterBuildEnv, rule: &lang::Rule, ethertype: &'a
 
     env.offset = ETH_LEN;
 
-    for test in rule.tests.iter() {
-        build_test_proto(env, test, fail)?;
+    if let Some(ruletest) = &rule.test {
+        for test in ruletest.tests.iter() {
+            build_test_proto(env, test, fail)?;
+        }
     }
 
     let action = match rule.action {

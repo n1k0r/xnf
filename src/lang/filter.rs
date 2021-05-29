@@ -35,7 +35,12 @@ impl Filter {
 pub struct Rule {
     pub action: Action,
     pub iface: Option<String>,
-    pub ethertype: Option<Const>,
+    pub test: Option<RuleTest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RuleTest {
+    pub ethertype: Const,
     pub tests: Vec<ProtoTest>,
 }
 

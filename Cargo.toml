@@ -5,6 +5,7 @@ authors = ["n1k0r"]
 edition = "2018"
 description = "XDP-based Network Filter"
 license = "MIT"
+default-run = "xnf"
 autoexamples = false
 
 [[bin]]
