@@ -9,6 +9,7 @@ use std::{collections::HashMap, path::Path, sync::mpsc::{self, Sender, Receiver}
 
 #[allow(dead_code)]
 struct LoadedFilter {
+    id: FilterID,
     object: Object,
     link: Link,
 }
@@ -16,9 +17,13 @@ struct LoadedFilter {
 enum LoadRequest {
     Load(FilterID),
     Unload,
+    Info,
 }
 
-type LoadResponse = Result<(), LoadError>;
+enum LoadResponse {
+    Load(Result<(), LoadError>),
+    Info(Result<Vec<IfaceInfo>, LoadError>)
+}
 
 pub struct Loader {
     sender: Sender<LoadRequest>,
@@ -46,6 +51,12 @@ pub enum LoadError {
     InternalError,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IfaceInfo {
+    pub name: String,
+    pub filter: Option<FilterID>,
+}
+
 impl Loader {
     pub fn new() -> Self {
         let (req_tx, req_rx) = mpsc::channel();
@@ -70,8 +81,8 @@ impl Loader {
         }
 
         let resp = match self.receiver.recv() {
-            Ok(resp) => resp,
-            Err(_) => return Err(LoadError::InternalError),
+            Ok(LoadResponse::Load(resp)) => resp,
+            _ => return Err(LoadError::InternalError),
         };
 
         resp
@@ -83,8 +94,21 @@ impl Loader {
         }
 
         let resp = match self.receiver.recv() {
-            Ok(resp) => resp,
-            Err(_) => return Err(LoadError::InternalError),
+            Ok(LoadResponse::Load(resp)) => resp,
+            _ => return Err(LoadError::InternalError),
+        };
+
+        resp
+    }
+
+    pub fn info(&mut self) -> Result<Vec<IfaceInfo>, LoadError> {
+        if let Err(_) = self.sender.send(LoadRequest::Info) {
+            return Err(LoadError::InternalError);
+        }
+
+        let resp = match self.receiver.recv() {
+            Ok(LoadResponse::Info(resp)) => resp,
+            _ => return Err(LoadError::InternalError),
         };
 
         resp
@@ -112,6 +136,7 @@ impl LoaderThread {
             let result = match req {
                 LoadRequest::Load(id) => self.request_load(id),
                 LoadRequest::Unload => self.request_unload(),
+                LoadRequest::Info => self.request_info(),
             };
             self.sender.send(result).unwrap();
         }
@@ -120,22 +145,47 @@ impl LoaderThread {
     fn request_load(&mut self, id: FilterID) -> LoadResponse {
         let storage = match FilterStorage::load(id) {
             Some(storage) => storage,
-            None => return Err(LoadError::StorageNotExist(id)),
+            None => return LoadResponse::Load(
+                Err(LoadError::StorageNotExist(id))
+            ),
         };
 
-        if let Err(err) = self.load(&storage) {
-            return Err(err);
-        }
-
-        Ok(())
+        let result = self.load(&storage);
+        LoadResponse::Load(result)
     }
 
     fn request_unload(&mut self) -> LoadResponse {
-        if let Err(err) = self.unload() {
-            return Err(err);
+        let result = self.unload();
+        LoadResponse::Load(result)
+    }
+
+    fn request_info(&mut self) -> LoadResponse {
+        let info = self.info();
+        LoadResponse::Info(info)
+    }
+
+    fn info(&mut self) -> Result<Vec<IfaceInfo>, LoadError> {
+        let mut info = vec![];
+
+        let ifaces = match get_ifaces() {
+            Some(ifaces) => ifaces,
+            None => return Err(LoadError::IfacesList),
+        };
+
+        for iface in ifaces.iter() {
+            let mut filter = None;
+
+            if let Some(loaded_filter) = self.filters.get(iface) {
+                filter = Some(loaded_filter.id);
+            }
+
+            info.push(IfaceInfo {
+                name: iface.clone(),
+                filter,
+            });
         }
 
-        Ok(())
+        Ok(info)
     }
 
     fn unload(&mut self) -> Result<(), LoadError> {
@@ -165,13 +215,13 @@ impl LoaderThread {
         for iface in ifaces.iter() {
             let path = storage.get_object(Some(iface));
             let path = path.as_ref().unwrap_or(&default);
-            self.load_iface(&path, iface)?;
+            self.load_iface(&path, iface, storage.id())?;
         }
 
         Ok(())
     }
 
-    fn load_iface(&mut self, path: &Path, iface: &str) -> Result<(), LoadError> {
+    fn load_iface(&mut self, path: &Path, iface: &str, id: FilterID) -> Result<(), LoadError> {
         let ifindex = match get_ifindex(iface) {
             Some(index) => index,
             None => return Err(LoadError::IfaceNotExist(iface.to_string())),
@@ -208,6 +258,7 @@ impl LoaderThread {
         };
 
         self.filters.insert(iface.to_string(), LoadedFilter {
+            id,
             object: obj,
             link: link,
         });

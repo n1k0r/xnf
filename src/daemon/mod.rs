@@ -48,6 +48,7 @@ fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
             Request::Load(id) => handler_load(id, loader.clone()),
             Request::Unload => handler_unload(loader.clone()),
             Request::Verify(filter, test) => handler_verify(filter, test),
+            Request::Info => handler_info(loader.clone()),
         };
 
         connection.send(&response).unwrap();
@@ -80,4 +81,10 @@ fn handler_unload(loader: Arc<Mutex<Loader>>) -> Response {
 fn handler_verify(filter: Filter, test: RuleTest) -> Response {
     let rules = verifier::verify(&filter, &test);
     Response::VerifyResult(rules)
+}
+
+fn handler_info(loader: Arc<Mutex<Loader>>) -> Response {
+    let mut loader = loader.lock().unwrap();
+    let result = loader.info();
+    Response::InfoResult(result)
 }

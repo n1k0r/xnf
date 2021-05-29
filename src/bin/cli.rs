@@ -29,11 +29,16 @@ struct Arguments {
 
 #[derive(Clap, Debug)]
 enum Command {
+    Show,
     Load(Load),
     Unload(Unload),
     Check(Check),
     Verify(Verify),
 }
+
+// Lists network interfaces
+#[derive(Clap, Debug)]
+struct Show {}
 
 /// Loads specified filter
 #[derive(Clap, Debug)]
@@ -71,6 +76,30 @@ fn main() {
 
     let args = Arguments::parse();
     match args.command {
+        Command::Show => {
+            let mut client = match Client::new() {
+                Ok(client) => client,
+                Err(_) => {
+                    eprintln!("{}", "Unable to connect to daemon".bold().red());
+                    std::process::exit(1);
+                },
+            };
+
+            let info = match client.info() {
+                Ok(info) => info,
+                Err(err) => {
+                    eprint.client_error(&err);
+                    std::process::exit(1);
+                },
+            };
+
+            for iface in info.iter() {
+                println!("{:12} {}", iface.name.blue().bold(), match iface.filter {
+                    Some(id) => filter_name(&id).yellow(),
+                    None => "-".repeat(16).dimmed(),
+                });
+            }
+        },
         Command::Load(load) => {
             let filter = match parse_filter_file(&mut eprint, &load.filter, args.debug) {
                 Ok(filter) => filter,

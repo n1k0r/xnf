@@ -1,5 +1,10 @@
 use super::unix;
-use crate::{compiler::CompileError, filter::{LoadError, storage::FilterID}, lang::{Filter, RuleTest}, verifier::VerifiedRule};
+use crate::{
+    compiler::CompileError,
+    filter::{storage::FilterID, IfaceInfo, LoadError},
+    lang::{Filter, RuleTest},
+    verifier::VerifiedRule,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +21,7 @@ pub enum Request {
     Load(FilterID),
     Unload,
     Verify(Filter, RuleTest),
+    Info,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,4 +30,5 @@ pub enum Response {
     LoadResult(Result<(), LoadError>),
     UnloadResult(Result<(), LoadError>),
     VerifyResult(Vec<VerifiedRule>),
+    InfoResult(Result<Vec<IfaceInfo>, LoadError>),
 }

@@ -1,6 +1,6 @@
 use crate::{
     compiler::CompileError,
-    filter::LoadError,
+    filter::{IfaceInfo, LoadError},
     ipc::{self, Connection, Request, Response},
     lang::{Filter, RuleTest},
     verifier::VerifiedRule,
@@ -69,6 +69,19 @@ impl Client {
 
         match self.recv()? {
             Response::VerifyResult(rules) => Ok(rules),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    pub fn info(&mut self) -> Result<Vec<IfaceInfo>, ClientError> {
+        let req = Request::Info;
+        self.send(&req)?;
+
+        match self.recv()? {
+            Response::InfoResult(info) => match info {
+                Ok(info) => Ok(info),
+                Err(err) => Err(ClientError::LoadError(err)),
+            },
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
