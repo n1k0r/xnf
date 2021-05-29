@@ -46,6 +46,7 @@ fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
         let response = match req {
             Request::Compile(filter) => handler_compile(filter),
             Request::Load(id) => handler_load(id, loader.clone()),
+            Request::Unload => handler_unload(loader.clone()),
             Request::Verify(filter, test) => handler_verify(filter, test),
         };
 
@@ -67,6 +68,12 @@ fn handler_compile(filter: Filter) -> Response {
 fn handler_load(id: FilterID, loader: Arc<Mutex<Loader>>) -> Response {
     let mut loader = loader.lock().unwrap();
     let result = loader.load(id);
+    Response::LoadResult(result)
+}
+
+fn handler_unload(loader: Arc<Mutex<Loader>>) -> Response {
+    let mut loader = loader.lock().unwrap();
+    let result = loader.unload();
     Response::LoadResult(result)
 }
 

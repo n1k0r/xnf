@@ -30,6 +30,7 @@ struct Arguments {
 #[derive(Clap, Debug)]
 enum Command {
     Load(Load),
+    Unload(Unload),
     Check(Check),
     Verify(Verify),
 }
@@ -40,6 +41,10 @@ struct Load {
     /// Path to filter description file
     filter: String,
 }
+
+/// Unloads all filters
+#[derive(Clap, Debug)]
+struct Unload {}
 
 /// Checks syntax of specified filter without loading
 #[derive(Clap, Debug)]
@@ -94,6 +99,22 @@ fn main() {
             }
 
             println!("{}", "Filter applied to network interfaces".bold().green());
+        },
+        Command::Unload(_) => {
+            let mut client = match Client::new() {
+                Ok(client) => client,
+                Err(_) => {
+                    eprintln!("{}", "Unable to connect to daemon".bold().red());
+                    std::process::exit(1);
+                },
+            };
+
+            if let Err(err) = client.unload_filter() {
+                eprint.client_error(&err);
+                std::process::exit(1);
+            }
+
+            println!("{}", "Filter has been unloaded".bold().green());
         },
         Command::Check(check) => {
             let result = parse_filter_file(&mut eprint, &check.filter, args.debug);
@@ -517,6 +538,7 @@ impl ErrorPrinter {
             LoadError::StorageNotExist(id) => println!("filter {} does not exist", filter_name(id)),
             LoadError::InvalidStorage(id) => println!("filter storage {} is invalid", filter_name(id)),
             LoadError::MarkStorage(id, err) => println!("unable to mark filter {}: {}", filter_name(id), err),
+            LoadError::UnmarkStorage(err) => println!("unable to remove mark of filter: {}", err),
             LoadError::Open(err) => println!("unable to open object: {}", err),
             LoadError::Load(err) => println!("unable to load object: {}", err),
             LoadError::Attach(err) => println!("unable to attach filter to network interface: {}", err),

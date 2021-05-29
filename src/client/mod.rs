@@ -42,8 +42,23 @@ impl Client {
         self.send(&req)?;
 
         match self.recv()? {
-            Response::LoadResult(Ok(())) => Ok(()),
-            Response::LoadResult(Err(err)) => Err(ClientError::LoadError(err)),
+            Response::LoadResult(result) => match result {
+                Ok(()) => Ok(()),
+                Err(err) => Err(ClientError::LoadError(err)),
+            },
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    pub fn unload_filter(&mut self) -> Result<(), ClientError> {
+        let req = Request::Unload;
+        self.send(&req)?;
+
+        match self.recv()? {
+            Response::LoadResult(result) => match result {
+                Ok(()) => Ok(()),
+                Err(err) => Err(ClientError::LoadError(err)),
+            },
             _ => Err(ClientError::UnexpectedResponse),
         }
     }

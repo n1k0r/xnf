@@ -13,7 +13,10 @@ struct LoadedFilter {
     link: Link,
 }
 
-type LoadRequest = FilterID;
+enum LoadRequest {
+    Load(FilterID),
+    Unload,
+}
 
 type LoadResponse = Result<(), LoadError>;
 
@@ -34,6 +37,7 @@ pub enum LoadError {
     StorageNotExist(FilterID),
     InvalidStorage(FilterID),
     MarkStorage(FilterID, String),
+    UnmarkStorage(String),
     IfacesList,
     IfaceNotExist(String),
     Open(String),
@@ -59,7 +63,22 @@ impl Loader {
     }
 
     pub fn load(&mut self, id: FilterID) -> Result<(), LoadError> {
-        if let Err(_) = self.sender.send(id.clone()) {
+        if let Err(_) = self.sender.send(
+            LoadRequest::Load(id.clone())
+        ) {
+            return Err(LoadError::InternalError);
+        }
+
+        let resp = match self.receiver.recv() {
+            Ok(resp) => resp,
+            Err(_) => return Err(LoadError::InternalError),
+        };
+
+        resp
+    }
+
+    pub fn unload(&mut self) -> Result<(), LoadError> {
+        if let Err(_) = self.sender.send(LoadRequest::Unload) {
             return Err(LoadError::InternalError);
         }
 
@@ -90,20 +109,40 @@ impl LoaderThread {
 
     pub fn work(&mut self) {
         while let Ok(req) = self.receiver.recv() {
-            let result = self.request(req);
+            let result = match req {
+                LoadRequest::Load(id) => self.request_load(id),
+                LoadRequest::Unload => self.request_unload(),
+            };
             self.sender.send(result).unwrap();
         }
     }
 
-    fn request(&mut self, req: LoadRequest) -> LoadResponse {
-        let storage = match FilterStorage::load(req) {
+    fn request_load(&mut self, id: FilterID) -> LoadResponse {
+        let storage = match FilterStorage::load(id) {
             Some(storage) => storage,
-            None => return Err(LoadError::StorageNotExist(req)),
+            None => return Err(LoadError::StorageNotExist(id)),
         };
 
         if let Err(err) = self.load(&storage) {
             return Err(err);
         }
+
+        Ok(())
+    }
+
+    fn request_unload(&mut self) -> LoadResponse {
+        if let Err(err) = self.unload() {
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    fn unload(&mut self) -> Result<(), LoadError> {
+        if let Err(err) = FilterStorage::remove_mark() {
+            return Err(LoadError::UnmarkStorage(err.to_string()));
+        }
+        self.filters.clear();
 
         Ok(())
     }

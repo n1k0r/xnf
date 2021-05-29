@@ -14,6 +14,7 @@ pub type Connection = unix::Connection<Request, Response>;
 pub enum Request {
     Compile(Filter),
     Load(FilterID),
+    Unload,
     Verify(Filter, RuleTest),
 }
 
@@ -21,5 +22,6 @@ pub enum Request {
 pub enum Response {
     CompileResult(Result<FilterID, CompileError>),
     LoadResult(Result<(), LoadError>),
+    UnloadResult(Result<(), LoadError>),
     VerifyResult(Vec<VerifiedRule>),
 }

@@ -100,11 +100,18 @@ impl FilterStorage {
     pub fn mark_current(&self) -> Result<(), IOError> {
         let filter_path = filter_path(&self.id);
         let current_link = PathBuf::from(CURRENT_PATH);
+        Self::remove_mark()?;
+
+        std::os::unix::fs::symlink(&filter_path, &current_link)?;
+
+        Ok(())
+    }
+
+    pub fn remove_mark() -> Result<(), IOError> {
+        let current_link = PathBuf::from(CURRENT_PATH);
         if current_link.exists() {
             std::fs::remove_file(&current_link)?;
         }
-
-        std::os::unix::fs::symlink(&filter_path, &current_link)?;
 
         Ok(())
     }
