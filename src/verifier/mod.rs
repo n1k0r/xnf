@@ -1,13 +1,16 @@
-use std::{cmp::Ordering, net::{Ipv4Addr, Ipv6Addr}};
-
 use crate::lang::{Const, CmpOp, Filter, Rule, RuleTest};
 
-pub struct VerifiedRule<'a> {
-    pub rule: &'a Rule,
+use serde::{Deserialize, Serialize};
+
+use std::{cmp::Ordering, net::{Ipv4Addr, Ipv6Addr}};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerifiedRule {
+    pub rule: Rule,
     pub last: bool,
 }
 
-pub fn verify<'a>(filter: &'a Filter, test: &RuleTest) -> Vec<VerifiedRule<'a>> {
+pub fn verify<'a>(filter: &'a Filter, test: &RuleTest) -> Vec<VerifiedRule> {
     let mut rules = vec![];
 
     let mut ifaces_done = vec![];
@@ -24,7 +27,7 @@ pub fn verify<'a>(filter: &'a Filter, test: &RuleTest) -> Vec<VerifiedRule<'a>> 
         }
 
         rules.push(VerifiedRule {
-            rule,
+            rule: rule.clone(),
             last: cmp == TestCmp::Includes,
         });
 

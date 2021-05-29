@@ -113,7 +113,22 @@ fn main() {
                 Err(()) => std::process::exit(1),
             };
 
-            let matched_rules = verifier::verify(&filter, &test);
+            let mut client = match Client::new() {
+                Ok(client) => client,
+                Err(_) => {
+                    eprintln!("{}", "Unable to connect to daemon".bold().red());
+                    std::process::exit(1);
+                },
+            };
+
+            let matched_rules = match client.verify_filter(filter, test) {
+                Ok(rules) => rules,
+                Err(err) => {
+                    eprint.client_error(&err);
+                    std::process::exit(1);
+                },
+            };
+
             for rule in matched_rules.iter() {
                 print_rule(rule);
             }
@@ -210,7 +225,7 @@ fn parse_test(eprint: &mut ErrorPrinter, src: &str, filter: &Filter, debug: bool
 }
 
 fn print_rule(vrule: &verifier::VerifiedRule) {
-    let rule = vrule.rule;
+    let rule = &vrule.rule;
     let mut line = vec![];
 
     if let Some(iface) = &rule.iface {

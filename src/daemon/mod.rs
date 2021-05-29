@@ -2,9 +2,10 @@ pub use crate::ipc::ListenerError;
 
 use crate::{
     compiler::compile,
-    filter::{Loader, storage::FilterID},
+    filter::{storage::FilterID, Loader},
     ipc::{self, Listener, Request, Response, ServerConnection},
-    lang::Filter
+    lang::{Filter, RuleTest},
+    verifier,
 };
 
 use std::{path::PathBuf, sync::{Arc, Mutex}};
@@ -45,6 +46,7 @@ fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
         let response = match req {
             Request::Compile(filter) => handler_compile(filter),
             Request::Load(id) => handler_load(id, loader.clone()),
+            Request::Verify(filter, test) => handler_verify(filter, test),
         };
 
         connection.send(&response).unwrap();
@@ -66,4 +68,9 @@ fn handler_load(id: FilterID, loader: Arc<Mutex<Loader>>) -> Response {
     let mut loader = loader.lock().unwrap();
     let result = loader.load(id);
     Response::LoadResult(result)
+}
+
+fn handler_verify(filter: Filter, test: RuleTest) -> Response {
+    let rules = verifier::verify(&filter, &test);
+    Response::VerifyResult(rules)
 }

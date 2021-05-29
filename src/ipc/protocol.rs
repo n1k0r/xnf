@@ -1,5 +1,5 @@
 use super::unix;
-use crate::{compiler::CompileError, filter::{LoadError, storage::FilterID}, lang::Filter};
+use crate::{compiler::CompileError, filter::{LoadError, storage::FilterID}, lang::{Filter, RuleTest}, verifier::VerifiedRule};
 
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +14,12 @@ pub type Connection = unix::Connection<Request, Response>;
 pub enum Request {
     Compile(Filter),
     Load(FilterID),
+    Verify(Filter, RuleTest),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Response {
     CompileResult(Result<FilterID, CompileError>),
     LoadResult(Result<(), LoadError>),
+    VerifyResult(Vec<VerifiedRule>),
 }

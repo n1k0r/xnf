@@ -31,26 +31,26 @@ impl Filter {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Rule {
     pub action: Action,
     pub iface: Option<String>,
     pub test: Option<RuleTest>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RuleTest {
     pub ethertype: Const,
     pub tests: Vec<ProtoTest>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ProtoTest {
     pub protocol: String,
     pub tests: Vec<FieldTest>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FieldTest {
     pub field: String,
     pub op: CmpOp,

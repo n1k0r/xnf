@@ -2,7 +2,8 @@ use crate::{
     compiler::CompileError,
     filter::LoadError,
     ipc::{self, Connection, Request, Response},
-    lang::Filter
+    lang::{Filter, RuleTest},
+    verifier::VerifiedRule,
 };
 
 use std::io::Error as IOError;
@@ -43,6 +44,16 @@ impl Client {
         match self.recv()? {
             Response::LoadResult(Ok(())) => Ok(()),
             Response::LoadResult(Err(err)) => Err(ClientError::LoadError(err)),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    pub fn verify_filter(&mut self, filter: Filter, test: RuleTest) -> Result<Vec<VerifiedRule>, ClientError> {
+        let req = Request::Verify(filter, test);
+        self.send(&req)?;
+
+        match self.recv()? {
+            Response::VerifyResult(rules) => Ok(rules),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }
