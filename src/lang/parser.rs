@@ -172,7 +172,10 @@ fn process_rules(parts: &Vec<Vec<RulePart>>, protocols: &[Protocol], connections
         };
 
         if root_proto.is_none() {
-            if action.is_some() && rule_parts.len() == 1 {
+            if action.is_some() && (
+                rule_parts.len() == 1 ||
+                (iface.is_some() && rule_parts.len() == 2)
+            ) {
                 rules.push(
                     Rule {
                         action: action.unwrap().clone(),
