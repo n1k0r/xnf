@@ -8,11 +8,14 @@ use inkwell::{
     module::Module,
     targets::{CodeModel, InitializationConfig as InitConfig, Target, TargetTriple},
     values::{FunctionValue, IntValue, PointerValue},
-    AddressSpace as AddrSpace, IntPredicate,
+    AddressSpace, IntPredicate,
 };
+use libbpf_rs::libbpf_sys;
 use serde::{Deserialize, Serialize};
 
-use std::path::Path;
+use std::{mem::size_of, path::Path};
+
+pub const STATS_MAP_NAME: &str = "STATS";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum CompileError {
@@ -34,6 +37,8 @@ enum ActionCode {
 
 const ETH_LEN: u64 = 14;
 const ETHERTYPE_OFFSET: u64 = 12;
+
+const GEN: AddressSpace = AddressSpace::Generic;
 
 pub fn compile(filter: &lang::Filter) -> Result<storage::FilterID, CompileError> {
     let folder = match FilterStorage::new() {
@@ -91,13 +96,36 @@ struct FilterBuildEnv<'a, 'f> {
     offset: u64,
 }
 
+pub const STATS_KEY_PASS: u32 = 0;
+pub const STATS_KEY_DROP: u32 = 1;
+const STATS_COUNT: u64 = 2;
+
 fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>) -> Result<Module<'a>, CompileError> {
     let module = ctx.create_module("");
+
+    let stats_type = ctx.struct_type(&[
+        ctx.i32_type().into(), // type
+        ctx.i32_type().into(), // key
+        ctx.i32_type().into(), // value
+        ctx.i32_type().into(), // count
+    ], false);
+
+    let stats = stats_type.const_named_struct(&[
+        ctx.i32_type().const_int(libbpf_sys::BPF_MAP_TYPE_PERCPU_ARRAY as u64, false).into(),
+        ctx.i32_type().const_int(size_of::<u32>() as u64, false).into(),
+        ctx.i32_type().const_int(size_of::<u64>() as u64, false).into(),
+        ctx.i32_type().const_int(STATS_COUNT, false).into(),
+    ]);
+
+    let stats_value = module.add_global(stats_type, Some(GEN), STATS_MAP_NAME);
+    stats_value.set_section("maps");
+    stats_value.set_initializer(&stats);
+    let stats_value_ptr = stats_value.as_pointer_value();
 
     let fn_main_type = ctx.i32_type().fn_type(
         &[
             ctx.i32_type()
-                .ptr_type(AddrSpace::Generic)
+                .ptr_type(GEN)
                 .into()
         ],
         false
@@ -109,21 +137,23 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>
     let builder = ctx.create_builder();
 
     let init = ctx.append_basic_block(fn_main, "init");
-
     let action_pass = ctx.append_basic_block(fn_main, "pass");
-    builder.position_at_end(action_pass);
-    let result = ctx.i32_type().const_int(ActionCode::Pass as u64, false);
-    builder.build_return(Some(&result));
-
     let action_drop = ctx.append_basic_block(fn_main, "drop");
-    builder.position_at_end(action_drop);
-    let result = ctx.i32_type().const_int(ActionCode::Drop as u64, false);
-    builder.build_return(Some(&result));
-
     let start = ctx.append_basic_block(fn_main, "start");
 
     builder.position_at_end(init);
+    let key = builder.build_alloca(ctx.i32_type(), "key");
     builder.build_unconditional_branch(start);
+
+    builder.position_at_end(action_pass);
+    build_stats_increment(ctx, &builder, &fn_main, stats_value_ptr, key, STATS_KEY_PASS);
+    let result = ctx.i32_type().const_int(ActionCode::Pass as u64, false);
+    builder.build_return(Some(&result));
+
+    builder.position_at_end(action_drop);
+    build_stats_increment(ctx, &builder, &fn_main, stats_value_ptr, key, STATS_KEY_DROP);
+    let result = ctx.i32_type().const_int(ActionCode::Drop as u64, false);
+    builder.build_return(Some(&result));
 
     builder.position_at_end(start);
     let data = builder.build_load(xdpctx, "data_32").into_int_value();
@@ -150,7 +180,7 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>
     build_mem_check(&env, ETH_LEN, eth, action_pass);
 
     builder.position_at_end(eth);
-    let eth_ptr = builder.build_int_to_ptr(data, ctx.i16_type().ptr_type(AddrSpace::Generic), "eth_ptr");
+    let eth_ptr = builder.build_int_to_ptr(data, ctx.i16_type().ptr_type(GEN), "eth_ptr");
     let ethertype_offset = ctx.i32_type().const_int(ETHERTYPE_OFFSET / 2, false);
     let ethertype_ptr = unsafe { builder.build_gep(eth_ptr, &[ethertype_offset], "ethertype_ptr") };
     let ethertype = builder.build_load(ethertype_ptr, "ethertype").into_int_value();
@@ -175,6 +205,48 @@ fn build_module<'a>(filter: &lang::Filter, ctx: &'a Context, iface: Option<&str>
     builder.build_unconditional_branch(action_pass);
 
     Ok(module)
+}
+
+fn build_stats_increment<'a>(
+    ctx: &'a Context,
+    builder: &'a Builder<'a>,
+    fn_main: &'a FunctionValue<'a>,
+    stats: PointerValue,
+    key: PointerValue,
+    index: u32,
+) {
+    let get_map_fn = ctx.i8_type().ptr_type(GEN).fn_type(&[
+        ctx.i8_type().ptr_type(GEN).into(),
+        ctx.i8_type().ptr_type(GEN).into(),
+    ], false);
+    let get_map_addr = ctx.i64_type().const_int(libbpf_sys::BPF_MAP_LOOKUP_ELEM as u64, false);
+    let get_map = builder.build_int_to_ptr(get_map_addr, get_map_fn.ptr_type(GEN), "get_map");
+
+    let stats_ptr = builder.build_pointer_cast(stats, ctx.i8_type().ptr_type(GEN), "stats_ptr");
+    let key_value = ctx.i32_type().const_int(index as u64, false);
+    builder.build_store(key, key_value);
+    let key_ptr = builder.build_pointer_cast(key, ctx.i8_type().ptr_type(GEN), "key_ptr");
+
+    let value_ptr = builder.build_call(get_map, &[stats_ptr.into(), key_ptr.into()], "value_ptr");
+    let value_ptr = value_ptr.try_as_basic_value().left().unwrap().into_pointer_value();
+
+    let value_exist = ctx.append_basic_block(*fn_main, "value_exist");
+    let after_increment = ctx.append_basic_block(*fn_main, "after_increment");
+
+    let value_addr = builder.build_ptr_to_int(value_ptr, ctx.i64_type(), "value_addr");
+    let zero = ctx.i64_type().const_int(0, false);
+    let check_value = builder.build_int_compare(IntPredicate::NE, value_addr, zero, "check_value");
+    builder.build_conditional_branch(check_value, value_exist, after_increment);
+
+    builder.position_at_end(value_exist);
+    let value_ptr = builder.build_pointer_cast(value_ptr, ctx.i64_type().ptr_type(GEN), "value_ptr_64");
+    let value = builder.build_load(value_ptr, "value").into_int_value();
+    let one = ctx.i64_type().const_int(1, false);
+    let result = builder.build_int_add(value, one.into(), "incremented");
+    builder.build_store(value_ptr, result);
+    builder.build_unconditional_branch(after_increment);
+
+    builder.position_at_end(after_increment);
 }
 
 fn build_rule<'a>(env: &'a mut FilterBuildEnv, rule: &lang::Rule, ethertype: &'a IntValue<'a>) -> Result<(), CompileError> {
@@ -273,7 +345,7 @@ fn build_test_field_addr4<'a>(env: &'a FilterBuildEnv, fieldtest: &FieldTest, pr
     let offset_bytes = (field.offset_bits / 8) as u64;
     let offset = env.ctx.i32_type().const_int(offset_bytes, false);
     let ptr = unsafe { env.builder.build_gep(ptr, &[offset], "") };
-    let ptr = env.builder.build_pointer_cast(ptr, env.ctx.i32_type().ptr_type(AddrSpace::Generic), "");
+    let ptr = env.builder.build_pointer_cast(ptr, env.ctx.i32_type().ptr_type(GEN), "");
     let value = env.builder.build_load(ptr, "").into_int_value();
     let const_mask = env.ctx.i32_type().const_int(mask.to_be() as u64, false);
     let value = env.builder.build_and(value, const_mask, "");
@@ -320,7 +392,7 @@ fn build_test_field_addr6<'a>(env: &'a FilterBuildEnv, fieldtest: &FieldTest, pr
     let offset_bytes = (field.offset_bits / 8) as u64;
     let offset = env.ctx.i32_type().const_int(offset_bytes, false);
     let ptr = unsafe { env.builder.build_gep(ptr, &[offset], "") };
-    let ptr = env.builder.build_pointer_cast(ptr, env.ctx.i128_type().ptr_type(AddrSpace::Generic), "");
+    let ptr = env.builder.build_pointer_cast(ptr, env.ctx.i128_type().ptr_type(GEN), "");
     let value = env.builder.build_load(ptr, "").into_int_value();
     let const_mask = env.ctx.i128_type().const_int_arbitrary_precision(&[mask as u64, (mask >> 64) as u64]);
     let value = env.builder.build_and(value, const_mask, "");
@@ -402,9 +474,9 @@ fn build_num_getter<'a>(env: &'a FilterBuildEnv, field: &Field, ptr: PointerValu
     let mut ptr = unsafe { env.builder.build_gep(ptr, &[offset], "") };
 
     ptr = match field.size_bits {
-        8 => env.builder.build_pointer_cast(ptr, env.ctx.i8_type().ptr_type(AddrSpace::Generic), ""),
-        16 => env.builder.build_pointer_cast(ptr, env.ctx.i16_type().ptr_type(AddrSpace::Generic), ""),
-        64 => env.builder.build_pointer_cast(ptr, env.ctx.i64_type().ptr_type(AddrSpace::Generic), ""),
+        8 => env.builder.build_pointer_cast(ptr, env.ctx.i8_type().ptr_type(GEN), ""),
+        16 => env.builder.build_pointer_cast(ptr, env.ctx.i16_type().ptr_type(GEN), ""),
+        64 => env.builder.build_pointer_cast(ptr, env.ctx.i64_type().ptr_type(GEN), ""),
         _ => ptr,
     };
 
@@ -437,7 +509,7 @@ fn build_num_part_getter<'a>(env: &'a FilterBuildEnv, field: &Field, ptr: Pointe
 fn build_mem_check<'a>(env: &'a FilterBuildEnv, offset: u64, then_block: BasicBlock, else_block: BasicBlock) -> PointerValue<'a> {
     let prev_offset = env.ctx.i64_type().const_int(env.offset, false);
     let pos = env.builder.build_int_add(*env.data, prev_offset, "");
-    let ptr = env.builder.build_int_to_ptr(pos, env.ctx.i8_type().ptr_type(AddrSpace::Generic), "ptr");
+    let ptr = env.builder.build_int_to_ptr(pos, env.ctx.i8_type().ptr_type(GEN), "ptr");
     let offset = env.ctx.i32_type().const_int(offset, false);
     let end_ptr = unsafe { env.builder.build_gep(ptr, &[offset], "end_ptr") };
     let end = env.builder.build_ptr_to_int(end_ptr, env.ctx.i64_type(), "end");

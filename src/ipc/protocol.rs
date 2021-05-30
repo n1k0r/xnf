@@ -1,7 +1,11 @@
 use super::unix;
 use crate::{
     compiler::CompileError,
-    filter::{storage::FilterID, IfaceInfo, LoadError},
+    filter::{
+        stats::{StatsError, StatsValues},
+        storage::FilterID,
+        IfaceInfo, LoadError,
+    },
     lang::{Filter, RuleTest},
     verifier::VerifiedRule,
 };
@@ -22,6 +26,8 @@ pub enum Request {
     Unload,
     Verify(Filter, RuleTest),
     Info,
+    GetStats,
+    ResetStats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,4 +37,6 @@ pub enum Response {
     UnloadResult(Result<(), LoadError>),
     VerifyResult(Vec<VerifiedRule>),
     InfoResult(Result<Vec<IfaceInfo>, LoadError>),
+    StatsValuesResult(Result<StatsValues, StatsError>),
+    ResetStatsResult(Result<(), StatsError>),
 }

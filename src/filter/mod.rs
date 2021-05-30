@@ -1,4 +1,5 @@
 pub mod storage;
+pub mod stats;
 
 mod loader;
 

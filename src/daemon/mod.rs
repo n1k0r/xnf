@@ -2,7 +2,7 @@ pub use crate::ipc::ListenerError;
 
 use crate::{
     compiler::compile,
-    filter::{storage::FilterID, Loader},
+    filter::{stats::Stats, storage::FilterID, Loader},
     ipc::{self, Listener, Request, Response, ServerConnection},
     lang::{Filter, RuleTest},
     verifier,
@@ -13,6 +13,7 @@ use std::{path::PathBuf, sync::{Arc, Mutex}};
 pub struct Daemon {
     listener: Listener,
     loader: Arc<Mutex<Loader>>,
+    stats: Arc<Mutex<Stats>>,
 }
 
 pub enum DaemonError {
@@ -28,20 +29,22 @@ impl Daemon {
             Err(err) => return Err(DaemonError::OpenListener(err)),
         };
 
-        let loader = Arc::new(Mutex::new(Loader::new()));
+        let stats = Arc::new(Mutex::new(Stats::new()));
+        let loader = Arc::new(Mutex::new(Loader::new(stats.clone())));
 
-        Ok(Daemon { listener, loader })
+        Ok(Daemon { listener, loader, stats })
     }
 
     pub fn listen(&mut self) {
         while let Some(connection) = self.listener.next() {
             let loader = self.loader.clone();
-            std::thread::spawn(|| handler(connection, loader));
+            let stats = self.stats.clone();
+            std::thread::spawn(|| handler(connection, loader, stats));
         }
     }
 }
 
-fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
+fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>, stats: Arc<Mutex<Stats>>) {
     while let Some(req) = connection.next() {
         let response = match req {
             Request::Compile(filter) => handler_compile(filter),
@@ -49,6 +52,8 @@ fn handler(mut connection: ServerConnection, loader: Arc<Mutex<Loader>>) {
             Request::Unload => handler_unload(loader.clone()),
             Request::Verify(filter, test) => handler_verify(filter, test),
             Request::Info => handler_info(loader.clone()),
+            Request::GetStats => handler_get_stats(stats.clone()),
+            Request::ResetStats => handler_reset_stats(stats.clone()),
         };
 
         connection.send(&response).unwrap();
@@ -87,4 +92,16 @@ fn handler_info(loader: Arc<Mutex<Loader>>) -> Response {
     let mut loader = loader.lock().unwrap();
     let result = loader.info();
     Response::InfoResult(result)
+}
+
+fn handler_get_stats(stats: Arc<Mutex<Stats>>) -> Response {
+    let mut stats = stats.lock().unwrap();
+    let result = stats.values();
+    Response::StatsValuesResult(result)
+}
+
+fn handler_reset_stats(stats: Arc<Mutex<Stats>>) -> Response {
+    let mut stats = stats.lock().unwrap();
+    let result = stats.reset();
+    Response::ResetStatsResult(result)
 }

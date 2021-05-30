@@ -1,7 +1,7 @@
 use xnf::{
     client::{Client, ClientError},
     compiler::CompileError,
-    filter::{storage::filter_name, LoadError},
+    filter::{stats::StatsError, storage::filter_name, LoadError},
     lang::{tokens::*, Filter, LexicalError, ParseError, RuleTest},
     verifier,
 };
@@ -29,14 +29,16 @@ struct Arguments {
 
 #[derive(Clap, Debug)]
 enum Command {
-    Show,
+    Show(Show),
     Load(Load),
     Unload(Unload),
     Check(Check),
     Verify(Verify),
+    Stats(Stats),
+    Reset(Reset),
 }
 
-// Lists network interfaces
+/// Lists network interfaces
 #[derive(Clap, Debug)]
 struct Show {}
 
@@ -69,6 +71,14 @@ struct Verify {
     rule: Vec<String>,
 }
 
+/// Gets statistical values
+#[derive(Clap, Debug)]
+struct Stats {}
+
+/// Resets statistical values
+#[derive(Clap, Debug)]
+struct Reset {}
+
 fn main() {
     setup_panic!();
 
@@ -76,14 +86,8 @@ fn main() {
 
     let args = Arguments::parse();
     match args.command {
-        Command::Show => {
-            let mut client = match Client::new() {
-                Ok(client) => client,
-                Err(_) => {
-                    eprintln!("{}", "Unable to connect to daemon".bold().red());
-                    std::process::exit(1);
-                },
-            };
+        Command::Show(_) => {
+            let mut client = get_client();
 
             let info = match client.info() {
                 Ok(info) => info,
@@ -106,13 +110,7 @@ fn main() {
                 Err(()) => std::process::exit(1),
             };
 
-            let mut client = match Client::new() {
-                Ok(client) => client,
-                Err(_) => {
-                    eprintln!("{}", "Unable to connect to daemon".bold().red());
-                    std::process::exit(1);
-                },
-            };
+            let mut client = get_client();
 
             let filter_id = match client.compile_filter(filter) {
                 Ok(id) => id,
@@ -130,13 +128,7 @@ fn main() {
             println!("{}", "Filter applied to network interfaces".bold().green());
         },
         Command::Unload(_) => {
-            let mut client = match Client::new() {
-                Ok(client) => client,
-                Err(_) => {
-                    eprintln!("{}", "Unable to connect to daemon".bold().red());
-                    std::process::exit(1);
-                },
-            };
+            let mut client = get_client();
 
             if let Err(err) = client.unload_filter() {
                 eprint.client_error(&err);
@@ -163,13 +155,7 @@ fn main() {
                 Err(()) => std::process::exit(1),
             };
 
-            let mut client = match Client::new() {
-                Ok(client) => client,
-                Err(_) => {
-                    eprintln!("{}", "Unable to connect to daemon".bold().red());
-                    std::process::exit(1);
-                },
-            };
+            let mut client = get_client();
 
             let matched_rules = match client.verify_filter(filter, test) {
                 Ok(rules) => rules,
@@ -186,6 +172,43 @@ fn main() {
             if matched_rules.len() == 0 {
                 println!("{}", "No rule matched this test so packet would be passed".bold().blue());
             }
+        },
+        Command::Stats(_) => {
+            let mut client = get_client();
+
+            let stats = match client.get_stats() {
+                Ok(info) => info,
+                Err(err) => {
+                    eprint.client_error(&err);
+                    std::process::exit(1);
+                },
+            };
+
+            let mut pairs: Vec<_> = stats.into_iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            for (key, value) in &pairs {
+                println!("{:12} {}", key.magenta().bold(), value);
+            }
+        },
+        Command::Reset(_) => {
+            let mut client = get_client();
+
+            if let Err(err) = client.reset_stats() {
+                eprint.client_error(&err);
+                std::process::exit(1);
+            };
+
+            println!("{}", "Statistics have been reset".bold().green());
+        },
+    }
+}
+
+fn get_client() -> Client {
+    match Client::new() {
+        Ok(client) => client,
+        Err(_) => {
+            eprintln!("{}", "Unable to connect to daemon".bold().red());
+            std::process::exit(1);
         },
     }
 }
@@ -577,10 +600,17 @@ impl ErrorPrinter {
         }
     }
 
+    fn stats_error(&mut self, error: &StatsError) {
+        match error {
+            StatsError::InternalError => println!("internal communication error"),
+        }
+    }
+
     fn client_error(&mut self, error: &ClientError) {
         match error {
             ClientError::CompilerError(err) => self.compile_error(err),
             ClientError::LoadError(err) => self.load_error(err),
+            ClientError::StatsError(err) => self.stats_error(err),
             ClientError::OpenListener(path, err) => {
                 let msg = format!(
                     "unable to connect to {}: {}",

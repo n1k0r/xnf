@@ -1,6 +1,9 @@
 use crate::{
     compiler::CompileError,
-    filter::{IfaceInfo, LoadError},
+    filter::{
+        stats::{StatsError, StatsValues},
+        IfaceInfo, LoadError,
+    },
     ipc::{self, Connection, Request, Response},
     lang::{Filter, RuleTest},
     verifier::VerifiedRule,
@@ -86,6 +89,32 @@ impl Client {
         }
     }
 
+    pub fn get_stats(&mut self) -> Result<StatsValues, ClientError> {
+        let req = Request::GetStats;
+        self.send(&req)?;
+
+        match self.recv()? {
+            Response::StatsValuesResult(result) => match result {
+                Ok(values) => Ok(values),
+                Err(err) => Err(ClientError::StatsError(err)),
+            },
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    pub fn reset_stats(&mut self) -> Result<(), ClientError> {
+        let req = Request::ResetStats;
+        self.send(&req)?;
+
+        match self.recv()? {
+            Response::ResetStatsResult(result) => match result {
+                Ok(()) => Ok(()),
+                Err(err) => Err(ClientError::StatsError(err)),
+            },
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
     fn send(&mut self, req: &Request) -> Result<(), ClientError> {
         if let Err(_) = self.connection.send(&req) {
             return Err(ClientError::ConnectionClosed);
@@ -109,4 +138,5 @@ pub enum ClientError {
     UnexpectedResponse,
     LoadError(LoadError),
     CompilerError(CompileError),
+    StatsError(StatsError),
 }
